@@ -37,6 +37,8 @@ public interface SystemInterface {
 
     Map<String, Object> getPReps(BigInteger startRanking, BigInteger endRanking);
 
+    Map<String, Object> getPRep(Address address);
+
     @Payable
     void registerPRep(String name, String email, String country, String city, String website, String details, String p2pEndpoint);
 }

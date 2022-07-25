@@ -50,6 +50,9 @@ public class StakingImpl implements Staking {
     private final VarDB<Address> sicxAddress = Context.newVarDB(SICX_ADDRESS, Address.class);
     private final VarDB<BigInteger> totalStake = Context.newVarDB(TOTAL_STAKE, BigInteger.class);
     private final VarDB<BigInteger> totalLifetimeReward = Context.newVarDB(TOTAL_LIFETIME_REWARD, BigInteger.class);
+    private final VarDB<BigInteger> productivity = Context.newVarDB(PRODUCTIVITY, BigInteger.class);
+    private final VarDB<BigInteger> ownerRewardsPercentage = Context.newVarDB(OWNER_REWARDS_PERCENTAGE, BigInteger.class);
+    private final VarDB<Address> reserve = Context.newVarDB(RESERVE, Address.class);
     private final VarDB<BigInteger> totalUnstakeAmount = Context.newVarDB(TOTAL_UNSTAKE_AMOUNT, BigInteger.class);
     private final ArrayDB<Address> topPreps = Context.newArrayDB(TOP_PREPS, Address.class);
     private final VarDB<BigInteger> icxToClaim = Context.newVarDB(ICX_TO_CLAIM, BigInteger.class);
@@ -70,6 +73,7 @@ public class StakingImpl implements Staking {
             BigInteger nextPrepTerm = (BigInteger) termDetails.get("nextPRepTerm");
             blockHeightWeek.set(nextPrepTerm);
             rate.set(ONE_EXA);
+            productivity.set(new BigInteger("90").multiply(ONE_EXA));
             setTopPreps();
             unstakeBatchLimit.set(DEFAULT_UNSTAKE_BATCH_LIMIT);
             stakingOn.set(false);
@@ -77,6 +81,13 @@ public class StakingImpl implements Staking {
             BigInteger stakedAmount = totalStake.getOrDefault(BigInteger.ZERO);
             Map<String, BigInteger> prepDelegations = prepDelegationInIcx.getOrDefault(DEFAULT_DELEGATION_LIST).toMap();
             stakeAndDelegateInNetwork(stakedAmount, prepDelegations);
+            productivity.set(new BigInteger("90").multiply(ONE_EXA));
+            // TODO : remove all below lines in prod , added only for test
+            int totalPreps = this.topPreps.size();
+            for (int i = 0; i < totalPreps; i++) {
+                this.topPreps.removeLast();
+            }
+            setTopPreps();
         }
     }
 
@@ -160,6 +171,39 @@ public class StakingImpl implements Staking {
     @External(readonly = true)
     public BigInteger getUnstakeBatchLimit() {
         return unstakeBatchLimit.get();
+    }
+
+    @External
+    public void setPrepProductivity(BigInteger _productivity) {
+        onlyOwner();
+        productivity.set(_productivity);
+    }
+
+    @External(readonly = true)
+    public BigInteger getPrepProductivity() {
+        return productivity.get();
+    }
+
+    @External
+    public void setOwnerRewardsPercentage(BigInteger percentage) {
+        onlyOwner();
+        ownerRewardsPercentage.set(percentage);
+    }
+
+    @External(readonly = true)
+    public BigInteger getOwnerRewardsPercentage() {
+        return ownerRewardsPercentage.get();
+    }
+
+    @External
+    public void setReserveContract(Address address) {
+        onlyOwner();
+        reserve.set(address);
+    }
+
+    @External(readonly = true)
+    public Address getReserveContract() {
+        return reserve.get();
     }
 
     @External(readonly = true)
@@ -323,8 +367,20 @@ public class StakingImpl implements Staking {
         List<Address> topPreps = new ArrayList<>();
         for (Map<String, Object> preps : prepDetails) {
             Address prepAddress = (Address) preps.get("address");
-            topPreps.add(prepAddress);
-            this.topPreps.add(prepAddress);
+            Map<String, Object> singlePrepInfo = (Map<String, Object>) Context.call(SYSTEM_SCORE_ADDRESS, "getPRep", prepAddress);
+            BigInteger totalBlocks = (BigInteger) singlePrepInfo.get("totalBlocks");
+            BigInteger validatedBlocks = (BigInteger) singlePrepInfo.get("validatedBlocks");
+            validatedBlocks = validatedBlocks.multiply(ONE_EXA);
+            totalBlocks = totalBlocks.multiply(ONE_EXA);
+            BigInteger bondedAmount = (BigInteger) singlePrepInfo.get("bonded");
+            if (validatedBlocks.compareTo(BigInteger.ZERO) == 0 ){
+                continue;
+            }
+            BigInteger prepProductivity = validatedBlocks.multiply(ONE_EXA).multiply(HUNDRED).divide(totalBlocks);
+            if ((!bondedAmount.equals(BigInteger.ZERO)) && prepProductivity.compareTo(productivity.get()) > 0) {
+                topPreps.add(prepAddress);
+                this.topPreps.add(prepAddress);
+            }
         }
         return topPreps;
     }
@@ -458,6 +514,12 @@ public class StakingImpl implements Staking {
 
         // If there is I-Score generated then update the rate
         if (dailyReward.compareTo(BigInteger.ZERO) > 0) {
+            // rewards percentage is in form of 5*10**18 i.e 5%
+            // total rewards of owner is calculated
+            BigInteger rewardsToOwnerWallet = (ownerRewardsPercentage.get().divide(HUNDRED)).multiply(dailyReward).divide(ONE_EXA);
+            dailyReward = dailyReward.subtract(rewardsToOwnerWallet);
+            // rewards of owner is sent to owner wallet address
+            sendIcx(reserve.get(), rewardsToOwnerWallet, null);
             totalLifetimeReward.set(getLifetimeReward().add(dailyReward));
             BigInteger totalStake = getTotalStake();
             BigInteger newTotalStake = totalStake.add(dailyReward);
@@ -511,6 +573,7 @@ public class StakingImpl implements Staking {
         BigInteger totalTopPreps = BigInteger.valueOf(topPreps.size());
 
         for (Address prep : topPreps) {
+            // TODO:  check if equally distributable icx comes in floating number if divided
             BigInteger amountToAdd = equallyDistributableIcx.divide(totalTopPreps);
             BigInteger currentAmount = prepDelegations.get(prep.toString());
             BigInteger value = currentAmount != null ? currentAmount.add(amountToAdd) : amountToAdd;

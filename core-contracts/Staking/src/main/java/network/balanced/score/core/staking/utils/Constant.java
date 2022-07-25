@@ -27,8 +27,9 @@ public class Constant {
     public static final Address SYSTEM_SCORE_ADDRESS = getSystemScoreAddress();
     public static final BigInteger ONE_EXA = pow10(18);
     public static final BigInteger HUNDRED = BigInteger.valueOf(100L);
+    public static final BigInteger TWO_HUNDRED = BigInteger.valueOf(200L);
     public static final BigInteger HUNDRED_PERCENTAGE = HUNDRED.multiply(ONE_EXA);
-    public static final BigInteger TOP_PREP_COUNT = HUNDRED;
+    public static final BigInteger TOP_PREP_COUNT = TWO_HUNDRED;
     public static final BigInteger DEFAULT_UNSTAKE_BATCH_LIMIT = BigInteger.valueOf(200L);
     public static final BigInteger MAX_ITERATION_LOOP = HUNDRED;
     public static final BigInteger DEFAULT_DECIMAL_VALUE = BigInteger.valueOf(18L);
@@ -43,6 +44,9 @@ public class Constant {
     public static final String TOTAL_STAKE = "_total_stake";
     public static final String DAILY_REWARD = "_daily_reward";
     public static final String TOTAL_LIFETIME_REWARD = "_total_lifetime_reward";
+    public static final String PRODUCTIVITY = "productivity";
+    public static final String OWNER_REWARDS_PERCENTAGE = "ownerRewardsPercentage";
+    public static final String RESERVE = "reserveAddress";
     public static final String DISTRIBUTING = "_distributing";
     public static final String LINKED_LIST_VAR = "_linked_list_var";
     public static final String TOP_PREPS = "_top_preps";
