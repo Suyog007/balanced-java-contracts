@@ -42,7 +42,6 @@ import static network.balanced.score.core.staking.db.LinkedListDB.DEFAULT_NODE_I
 import static network.balanced.score.core.staking.utils.Checks.onlyOwner;
 import static network.balanced.score.core.staking.utils.Checks.stakingOn;
 import static network.balanced.score.core.staking.utils.Constant.*;
-
 public class StakingImpl implements Staking {
 
     private final VarDB<BigInteger> rate = Context.newVarDB(RATE, BigInteger.class);
@@ -78,10 +77,11 @@ public class StakingImpl implements Staking {
             unstakeBatchLimit.set(DEFAULT_UNSTAKE_BATCH_LIMIT);
             stakingOn.set(false);
         } else {
-            BigInteger stakedAmount = totalStake.getOrDefault(BigInteger.ZERO);
-            Map<String, BigInteger> prepDelegations = prepDelegationInIcx.getOrDefault(DEFAULT_DELEGATION_LIST).toMap();
-            stakeAndDelegateInNetwork(stakedAmount, prepDelegations);
             productivity.set(new BigInteger("90").multiply(ONE_EXA));
+            // set 5% to owner rewards percentage
+            ownerRewardsPercentage.set(new BigInteger("5").multiply(ONE_EXA));
+            // set reserve address
+            reserve.set(Context.getOwner());
             // TODO : remove all below lines in prod , added only for test
             int totalPreps = this.topPreps.size();
             for (int i = 0; i < totalPreps; i++) {
@@ -174,14 +174,14 @@ public class StakingImpl implements Staking {
     }
 
     @External
-    public void setPrepProductivity(BigInteger _productivity) {
+    public void setPrepProductivity(BigInteger productivityPercentage) {
         onlyOwner();
-        productivity.set(_productivity);
+        productivity.set(productivityPercentage);
     }
 
     @External(readonly = true)
     public BigInteger getPrepProductivity() {
-        return productivity.get();
+        return productivity.getOrDefault(BigInteger.ZERO);
     }
 
     @External
@@ -192,7 +192,7 @@ public class StakingImpl implements Staking {
 
     @External(readonly = true)
     public BigInteger getOwnerRewardsPercentage() {
-        return ownerRewardsPercentage.get();
+        return ownerRewardsPercentage.getOrDefault(BigInteger.ZERO);
     }
 
     @External
@@ -367,17 +367,14 @@ public class StakingImpl implements Staking {
         List<Address> topPreps = new ArrayList<>();
         for (Map<String, Object> preps : prepDetails) {
             Address prepAddress = (Address) preps.get("address");
-            Map<String, Object> singlePrepInfo = (Map<String, Object>) Context.call(SYSTEM_SCORE_ADDRESS, "getPRep", prepAddress);
-            BigInteger totalBlocks = (BigInteger) singlePrepInfo.get("totalBlocks");
-            BigInteger validatedBlocks = (BigInteger) singlePrepInfo.get("validatedBlocks");
-            validatedBlocks = validatedBlocks.multiply(ONE_EXA);
-            totalBlocks = totalBlocks.multiply(ONE_EXA);
-            BigInteger bondedAmount = (BigInteger) singlePrepInfo.get("bonded");
-            if (validatedBlocks.compareTo(BigInteger.ZERO) == 0 ){
-                continue;
+            BigInteger totalBlocks = (BigInteger) preps.get("totalBlocks");
+            BigInteger validatedBlocks = (BigInteger) preps.get("validatedBlocks");
+            BigInteger power = (BigInteger) preps.get("power");
+            BigInteger prepProductivity = BigInteger.ZERO;
+            if (totalBlocks.compareTo(BigInteger.ZERO) > 0) {
+                prepProductivity = validatedBlocks.multiply(ONE_EXA).multiply(HUNDRED).divide(totalBlocks);
             }
-            BigInteger prepProductivity = validatedBlocks.multiply(ONE_EXA).multiply(HUNDRED).divide(totalBlocks);
-            if ((!bondedAmount.equals(BigInteger.ZERO)) && prepProductivity.compareTo(productivity.get()) > 0) {
+            if ((!power.equals(BigInteger.ZERO)) && prepProductivity.compareTo(productivity.getOrDefault(BigInteger.ZERO)) > 0) {
                 topPreps.add(prepAddress);
                 this.topPreps.add(prepAddress);
             }
@@ -516,7 +513,7 @@ public class StakingImpl implements Staking {
         if (dailyReward.compareTo(BigInteger.ZERO) > 0) {
             // rewards percentage is in form of 5*10**18 i.e 5%
             // total rewards of owner is calculated
-            BigInteger rewardsToOwnerWallet = (ownerRewardsPercentage.get().divide(HUNDRED)).multiply(dailyReward).divide(ONE_EXA);
+            BigInteger rewardsToOwnerWallet = (ownerRewardsPercentage.getOrDefault(BigInteger.ZERO).multiply(dailyReward)).divide(ONE_EXA).divide(HUNDRED);
             dailyReward = dailyReward.subtract(rewardsToOwnerWallet);
             // rewards of owner is sent to owner wallet address
             sendIcx(reserve.get(), rewardsToOwnerWallet, null);
@@ -573,7 +570,6 @@ public class StakingImpl implements Staking {
         BigInteger totalTopPreps = BigInteger.valueOf(topPreps.size());
 
         for (Address prep : topPreps) {
-            // TODO:  check if equally distributable icx comes in floating number if divided
             BigInteger amountToAdd = equallyDistributableIcx.divide(totalTopPreps);
             BigInteger currentAmount = prepDelegations.get(prep.toString());
             BigInteger value = currentAmount != null ? currentAmount.add(amountToAdd) : amountToAdd;
