@@ -60,6 +60,24 @@ public interface Staking {
     @External(readonly = true)
     BigInteger getUnstakeBatchLimit();
 
+    @External
+    void setPrepProductivity(BigInteger productivityPercentage);
+
+    @External(readonly = true)
+    BigInteger getPrepProductivity();
+
+    @External
+    void setOwnerRewardsPercentage(BigInteger percentage);
+
+    @External(readonly = true)
+    BigInteger getOwnerRewardsPercentage();
+
+    @External
+    void setReserveContract(Address address);
+
+    @External(readonly = true)
+    Address getReserveContract();
+
     @External(readonly = true)
     List<Address> getPrepList();
 
