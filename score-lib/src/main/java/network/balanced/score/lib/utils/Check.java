@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2022 Balanced.network.
+ * Copyright (c) 2022-2023 Balanced.network.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,10 @@ import score.Address;
 import score.Context;
 import score.VarDB;
 
+import java.math.BigInteger;
+
+import static network.balanced.score.lib.utils.BalancedAddressManager.getGovernance;
+
 public class Check {
 
     public static void onlyOwner() {
@@ -28,9 +32,43 @@ public class Check {
         Context.require(caller.equals(owner), "SenderNotScoreOwner: Sender=" + caller + "Owner=" + owner);
     }
 
-    public static void only(VarDB<Address> authorizedCaller) {
+    public static void checkStatus() {
+        checkStatus(getGovernance());
+    }
+
+    public static void checkStatus(VarDB<Address> address) {
+        Address handler = address.get();
+        if (handler == null) {
+            return;
+        }
+
+        checkStatus(handler);
+    }
+
+    public static void checkStatus(Address handler) {
+        String caller = Context.getCaller().toString();
+        Context.call(handler, "checkStatus", caller);
+    }
+
+    public static void onlyGovernance() {
+        Address governance = getGovernance();
+        only(governance);
+    }
+
+    public static void onlyOwnerOrContract() {
         Address caller = Context.getCaller();
-        Address authorizedCallerAddress = authorizedCaller.get();
+        Address owner = Context.getOwner();
+        Address contract = Context.getAddress();
+        Context.require(caller.equals(owner) || caller.equals(contract),
+                "SenderNotScoreOwnerOrContract: Sender=" + caller + " Owner=" + owner + " Contract=" + contract);
+    }
+
+    public static void only(VarDB<Address> authorizedCaller) {
+        only(authorizedCaller.get());
+    }
+
+    public static void only(Address authorizedCallerAddress) {
+        Address caller = Context.getCaller();
         Context.require(authorizedCallerAddress != null, "Authorization Check: Address not set");
         Context.require(caller.equals(authorizedCallerAddress),
                 "Authorization Check: Authorization failed. Caller: " + caller + " Authorized Caller: " + authorizedCallerAddress);
@@ -40,9 +78,9 @@ public class Check {
         Address caller = Context.getCaller();
         Address authorizedCallerAddress = authorizedCaller.get();
         Address authorizedCaller2Address = authorizedCaller2.get();
-        Context.require(authorizedCallerAddress != null || 
-                        authorizedCaller2Address != null, 
-                        "Authorization Check: Address not set");
+        Context.require(authorizedCallerAddress != null ||
+                        authorizedCaller2Address != null,
+                "Authorization Check: Address not set");
         Context.require(caller.equals(authorizedCallerAddress) ||
                         caller.equals(authorizedCaller2Address),
                 "Authorization Check: Authorization failed. Caller: " + caller + " Authorized Caller: " + authorizedCallerAddress + " or " + authorizedCaller2Address);
@@ -53,11 +91,38 @@ public class Check {
                 "is required.");
     }
 
-    public static <T> T optionalDefault(T value, T base) {
+    public static BigInteger optionalDefault(BigInteger value, BigInteger base) {
+        if (value.equals(BigInteger.ZERO)) {
+            return base;
+        }
+
+        return value;
+    }
+
+    public static Address optionalDefault(Address value, Address base) {
         if (value == null) {
             return base;
         }
 
         return value;
+    }
+
+    public static String optionalDefault(String value, String base) {
+        if (value == null) {
+            return base;
+        }
+
+        return value;
+    }
+
+    /**
+     * Note:
+     * This method does not work for non readonly interscore calls to readonly methods.
+     * In this case there will be a transactions hash but the interscore call will still be readonly.
+     * If anything is written Access denied error will be raised. Both variables and databases.
+     * @return Whether a call is readonly or not.
+     */
+    public static boolean readonly() {
+        return Context.getTransactionHash() == null;
     }
 }
