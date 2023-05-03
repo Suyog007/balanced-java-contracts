@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2022 Balanced.network.
+ * Copyright (c) 2022-2023 Balanced.network.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,10 @@
 package network.balanced.score.lib.interfaces;
 
 import foundation.icon.score.client.ScoreClient;
-import score.*;
+import foundation.icon.score.client.ScoreInterface;
+import network.balanced.score.lib.interfaces.base.Version;
+import network.balanced.score.lib.structs.PrepDelegations;
+import score.Address;
 import score.annotation.External;
 import score.annotation.Optional;
 import score.annotation.Payable;
@@ -26,15 +29,18 @@ import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
 
-import foundation.icon.score.client.ScoreInterface;
-import network.balanced.score.lib.structs.PrepDelegations;
-
 @ScoreClient
 @ScoreInterface
-public interface Staking {
+public interface Staking extends Version {
 
     @External(readonly = true)
     String name();
+
+    @External
+    void setEmergencyManager(Address _address);
+
+    @External(readonly = true)
+    Address getEmergencyManager();
 
     @External
     void setBlockHeightWeek(BigInteger _height);
@@ -59,24 +65,6 @@ public interface Staking {
 
     @External(readonly = true)
     BigInteger getUnstakeBatchLimit();
-
-    @External
-    void setPrepProductivity(BigInteger productivityPercentage);
-
-    @External(readonly = true)
-    BigInteger getPrepProductivity();
-
-    @External
-    void setOwnerRewardsPercentage(BigInteger percentage);
-
-    @External(readonly = true)
-    BigInteger getOwnerRewardsPercentage();
-
-    @External
-    void setReserveContract(Address address);
-
-    @External(readonly = true)
-    Address getReserveContract();
 
     @External(readonly = true)
     List<Address> getPrepList();
@@ -135,4 +123,16 @@ public interface Staking {
 
     @External(readonly = true)
     List<Map<String, Object>> getUserUnstakeInfo(Address _address);
+
+    @External
+    void setOmmLendingPoolCore(Address _address);
+
+    @External
+    public void setPrepProductivity(BigInteger _productivity);
+
+    @External
+    public void setFeeDistributionAddress(Address _address);
+
+    @External(readonly = true)
+    public BigInteger getPrepProductivity();
 }

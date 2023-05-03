@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2022 Balanced.network.
+ * Copyright (c) 2022-2023 Balanced.network.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@ import network.balanced.score.core.staking.utils.Constant;
 import network.balanced.score.core.staking.utils.UnstakeDetails;
 import network.balanced.score.lib.interfaces.Staking;
 import network.balanced.score.lib.structs.PrepDelegations;
+import network.balanced.score.lib.utils.Names;
+import network.balanced.score.lib.utils.Versions;
 import score.*;
 import score.annotation.EventLog;
 import score.annotation.External;
@@ -41,7 +43,15 @@ import java.util.Map;
 import static network.balanced.score.core.staking.db.LinkedListDB.DEFAULT_NODE_ID;
 import static network.balanced.score.core.staking.utils.Checks.onlyOwner;
 import static network.balanced.score.core.staking.utils.Checks.stakingOn;
+import static network.balanced.score.core.staking.utils.Constant.FEE_ADDRESS;
+import static network.balanced.score.core.staking.utils.Constant.FEE_PERCENTAGE;
+import static network.balanced.score.core.staking.utils.Constant.OMM_LENDING_POOL_CORE;
+import static network.balanced.score.core.staking.utils.Constant.PRODUCTIVITY;
+import static network.balanced.score.core.staking.utils.Constant.STATUS_MANAGER;
+import static network.balanced.score.core.staking.utils.Constant.VERSION;
+import static network.balanced.score.lib.utils.Check.checkStatus;
 import static network.balanced.score.core.staking.utils.Constant.*;
+
 public class StakingImpl implements Staking {
 
     private final VarDB<BigInteger> rate = Context.newVarDB(RATE, BigInteger.class);
@@ -50,8 +60,6 @@ public class StakingImpl implements Staking {
     private final VarDB<BigInteger> totalStake = Context.newVarDB(TOTAL_STAKE, BigInteger.class);
     private final VarDB<BigInteger> totalLifetimeReward = Context.newVarDB(TOTAL_LIFETIME_REWARD, BigInteger.class);
     private final VarDB<BigInteger> productivity = Context.newVarDB(PRODUCTIVITY, BigInteger.class);
-    private final VarDB<BigInteger> ownerRewardsPercentage = Context.newVarDB(OWNER_REWARDS_PERCENTAGE, BigInteger.class);
-    private final VarDB<Address> reserve = Context.newVarDB(RESERVE, Address.class);
     private final VarDB<BigInteger> totalUnstakeAmount = Context.newVarDB(TOTAL_UNSTAKE_AMOUNT, BigInteger.class);
     private final ArrayDB<Address> topPreps = Context.newArrayDB(TOP_PREPS, Address.class);
     private final VarDB<BigInteger> icxToClaim = Context.newVarDB(ICX_TO_CLAIM, BigInteger.class);
@@ -63,32 +71,38 @@ public class StakingImpl implements Staking {
             Context.newDictDB(USER_DELEGATION_PERCENTAGE, DelegationListDBSdo.class);
     private final VarDB<DelegationListDBSdo> prepDelegationInIcx = Context.newVarDB(PREP_DELEGATION_ICX,
             DelegationListDBSdo.class);
+    private final VarDB<String> currentVersion = Context.newVarDB(VERSION, String.class);
+
+    private final VarDB<Address> statusManager = Context.newVarDB(STATUS_MANAGER, Address.class);
+    private final VarDB<BigInteger> feePercentage = Context.newVarDB(FEE_PERCENTAGE,BigInteger.class);
+    private final VarDB<Address> feeDistributionAddress = Context.newVarDB(FEE_ADDRESS,Address.class);
+    private final VarDB<Address> ommLendingPoolCore = Context.newVarDB(OMM_LENDING_POOL_CORE,Address.class);
 
     public StakingImpl() {
 
         if (blockHeightWeek.get() == null) {
+
             @SuppressWarnings("unchecked")
             Map<String, Object> termDetails = (Map<String, Object>) Context.call(SYSTEM_SCORE_ADDRESS, "getIISSInfo");
             BigInteger nextPrepTerm = (BigInteger) termDetails.get("nextPRepTerm");
             blockHeightWeek.set(nextPrepTerm);
             rate.set(ONE_EXA);
-            productivity.set(new BigInteger("90").multiply(ONE_EXA));
+            productivity.set(new BigInteger("90").multiply(ONE_EXA).divide(HUNDRED));
             setTopPreps();
             unstakeBatchLimit.set(DEFAULT_UNSTAKE_BATCH_LIMIT);
-            stakingOn.set(false);
-        } else {
-            productivity.set(new BigInteger("90").multiply(ONE_EXA));
-            // set 5% to owner rewards percentage
-            ownerRewardsPercentage.set(new BigInteger("5").multiply(ONE_EXA));
-            // set reserve address
-            reserve.set(Context.getOwner());
-            // TODO : remove all below lines in prod , added only for test
-            int totalPreps = this.topPreps.size();
-            for (int i = 0; i < totalPreps; i++) {
-                this.topPreps.removeLast();
-            }
+            stakingOn.set(true);
+        }
+
+        else {
+            productivity.set(new BigInteger("90").multiply(ONE_EXA).divide(HUNDRED)); // for percentage
+            feePercentage.set(new BigInteger("10").multiply(ONE_EXA).divide(HUNDRED));
             setTopPreps();
         }
+
+        if (currentVersion.getOrDefault("").equals(Versions.STAKING)) {
+            Context.revert("Can't Update same version of code");
+        }
+        currentVersion.set(Versions.STAKING);
     }
 
     // Event logs
@@ -119,7 +133,24 @@ public class StakingImpl implements Staking {
     // Read Only methods
     @External(readonly = true)
     public String name() {
-        return TAG;
+        return Names.STAKING;
+    }
+
+    @External(readonly = true)
+    public String version() {
+        return currentVersion.getOrDefault("");
+    }
+
+    @External
+    public void setEmergencyManager(Address _address) {
+        onlyOwner();
+        statusManager.set(_address);
+    }
+
+    @Override
+    @External(readonly = true)
+    public Address getEmergencyManager() {
+        return statusManager.get();
     }
 
     @External
@@ -161,6 +192,47 @@ public class StakingImpl implements Staking {
     public Address getSicxAddress() {
         return sicxAddress.get();
     }
+    @External
+    public void setFeePercentage(BigInteger _percentage) {
+        onlyOwner();
+        feePercentage.set(_percentage);
+    }
+    @External(readonly = true)
+    public BigInteger getFeePercentage() {
+        return feePercentage.get();
+    }
+
+    @External
+    public void setFeeDistributionAddress(Address _address) {
+        onlyOwner();
+        Context.require(_address.isContract(), TAG + ": Address provided is an EOA address. A contract " +
+                "address is required.");
+        feeDistributionAddress.set(_address);
+    }
+    @External(readonly = true)
+    public Address getFeeDistributionAddress() {
+        return feeDistributionAddress.get();
+    }
+    @External
+    public void setOmmLendingPoolCore(Address _address) {
+        onlyOwner();
+        Context.require(_address.isContract(), TAG + ": Address provided is an EOA address. A contract " +
+                "address is required.");
+        ommLendingPoolCore.set(_address);
+    }
+    @External(readonly = true)
+    public Address getOmmLendingPoolCore() {
+        return ommLendingPoolCore.get();
+    }
+    @External
+    public void setPrepProductivity(BigInteger _productivity) {
+        onlyOwner();
+        productivity.set(_productivity);
+    }
+    @External(readonly = true)
+    public BigInteger getPrepProductivity() {
+        return productivity.get();
+    }
 
     @External
     public void setUnstakeBatchLimit(BigInteger _limit) {
@@ -171,39 +243,6 @@ public class StakingImpl implements Staking {
     @External(readonly = true)
     public BigInteger getUnstakeBatchLimit() {
         return unstakeBatchLimit.get();
-    }
-
-    @External
-    public void setPrepProductivity(BigInteger productivityPercentage) {
-        onlyOwner();
-        productivity.set(productivityPercentage);
-    }
-
-    @External(readonly = true)
-    public BigInteger getPrepProductivity() {
-        return productivity.getOrDefault(BigInteger.ZERO);
-    }
-
-    @External
-    public void setOwnerRewardsPercentage(BigInteger percentage) {
-        onlyOwner();
-        ownerRewardsPercentage.set(percentage);
-    }
-
-    @External(readonly = true)
-    public BigInteger getOwnerRewardsPercentage() {
-        return ownerRewardsPercentage.getOrDefault(BigInteger.ZERO);
-    }
-
-    @External
-    public void setReserveContract(Address address) {
-        onlyOwner();
-        reserve.set(address);
-    }
-
-    @External(readonly = true)
-    public Address getReserveContract() {
-        return reserve.get();
     }
 
     @External(readonly = true)
@@ -300,13 +339,16 @@ public class StakingImpl implements Staking {
 
     @Payable
     public void fallback() {
+        checkStatus(statusManager);
         stakeICX(Context.getCaller(), null);
     }
 
     @External
     public void tokenFallback(Address _from, BigInteger _value, byte[] _data) {
+        checkStatus(statusManager);
         stakingOn();
-        Context.require(Context.getCaller().equals(sicxAddress.get()), TAG + ": The Staking contract only accepts sICX tokens.: "+ sicxAddress.get());
+        Context.require(Context.getCaller().equals(sicxAddress.get()), TAG + ": The Staking contract only accepts " +
+                "sICX tokens.: " + sicxAddress.get());
 
         String unpackedData = new String(_data);
         JsonObject json = Json.parse(unpackedData).asObject();
@@ -336,6 +378,7 @@ public class StakingImpl implements Staking {
 
     @External
     public void claimUnstakedICX(@Optional Address _to) {
+        checkStatus(statusManager);
         if (_to == null) {
             _to = Context.getCaller();
         }
@@ -464,6 +507,7 @@ public class StakingImpl implements Staking {
 
     @External
     public void delegate(PrepDelegations[] _user_delegations) {
+        checkStatus(statusManager);
         stakingOn();
         Address to = Context.getCaller();
         performChecksForIscoreAndUnstakedBalance();
@@ -511,12 +555,11 @@ public class StakingImpl implements Staking {
 
         // If there is I-Score generated then update the rate
         if (dailyReward.compareTo(BigInteger.ZERO) > 0) {
-            // rewards percentage is in form of 5*10**18 i.e 5%
-            // total rewards of owner is calculated
-            BigInteger rewardsToOwnerWallet = (ownerRewardsPercentage.getOrDefault(BigInteger.ZERO).multiply(dailyReward)).divide(ONE_EXA).divide(HUNDRED);
-            dailyReward = dailyReward.subtract(rewardsToOwnerWallet);
-            // rewards of owner is sent to owner wallet address
-            sendIcx(reserve.get(), rewardsToOwnerWallet, null);
+            BigInteger feeAmt = getFeePercentage().multiply(dailyReward).divide(ONE_EXA).divide(HUNDRED);
+            BigInteger sicxToMint = (ONE_EXA.multiply(feeAmt)).divide(getTodayRate());
+            Context.call(sicxAddress.get(), "mintTo", getFeeDistributionAddress(), sicxToMint,
+                    "staking fee".getBytes());
+
             totalLifetimeReward.set(getLifetimeReward().add(dailyReward));
             BigInteger totalStake = getTotalStake();
             BigInteger newTotalStake = totalStake.add(dailyReward);
@@ -567,22 +610,31 @@ public class StakingImpl implements Staking {
         }
 
         BigInteger equallyDistributableIcx = totalStake.subtract(icxPreferredToTopPreps);
-        BigInteger totalTopPreps = BigInteger.valueOf(topPreps.size());
 
-        for (Address prep : topPreps) {
-            BigInteger amountToAdd = equallyDistributableIcx.divide(totalTopPreps);
-            BigInteger currentAmount = prepDelegations.get(prep.toString());
-            BigInteger value = currentAmount != null ? currentAmount.add(amountToAdd) : amountToAdd;
-            networkDelegationList.add(Map.of("address", prep, "value", value));
-            equallyDistributableIcx = equallyDistributableIcx.subtract(amountToAdd);
-            totalTopPreps = totalTopPreps.subtract(BigInteger.ONE);
+        Map<String, BigInteger> ommDelegations =getActualUserDelegationPercentage(getOmmLendingPoolCore());
+        BigInteger ommPrepsSize = BigInteger.valueOf(ommDelegations.size());
+        for (String prep : ommDelegations.keySet()){
+            BigInteger amountToAdd = equallyDistributableIcx.divide(ommPrepsSize);
+            if (topPreps.contains(Address.fromString(prep))){
+                BigInteger currentAmount = prepDelegations.get(prep);
+                BigInteger value = currentAmount != null ? currentAmount.add(amountToAdd) : amountToAdd;
+                networkDelegationList.add(Map.of("address", prep, "value", value));
+                equallyDistributableIcx = equallyDistributableIcx.subtract(amountToAdd);
+            }
         }
+        if (equallyDistributableIcx.compareTo(BigInteger.ZERO)>0){
+            BigInteger currentAmount = prepDelegations.get(topPreps.get(0).toString());
+            BigInteger value = currentAmount != null ? currentAmount.add(equallyDistributableIcx) : equallyDistributableIcx;
+            networkDelegationList.add(Map.of("address",topPreps.get(0) , "value", value));
+        }
+
         Context.call(SYSTEM_SCORE_ADDRESS, "setDelegation", networkDelegationList);
     }
 
     @External
     @Payable
     public BigInteger stakeICX(@Optional Address _to, @Optional byte[] _data) {
+        checkStatus(statusManager);
         stakingOn();
         if (_data == null) {
             _data = new byte[0];
@@ -594,8 +646,6 @@ public class StakingImpl implements Staking {
         BigInteger addedIcx = Context.getValue();
 
         BigInteger sicxToMint = (ONE_EXA.multiply(addedIcx)).divide(getTodayRate());
-        Context.call(sicxAddress.get(), "mintTo", _to, sicxToMint, _data);
-        TokenTransfer(_to, sicxToMint, sicxToMint + " sICX minted to " + _to);
 
         Map<String, BigInteger> userCurrentDelegation = userDelegationInPercentage.getOrDefault(_to,
                 DEFAULT_DELEGATION_LIST).toMap();
@@ -609,11 +659,14 @@ public class StakingImpl implements Staking {
         BigInteger newTotalStake = this.totalStake.getOrDefault(BigInteger.ZERO).add(addedIcx);
         this.totalStake.set(newTotalStake);
         stakeAndDelegateInNetwork(newTotalStake, finalDelegation);
+        Context.call(sicxAddress.get(), "mintTo", _to, sicxToMint, _data);
+        TokenTransfer(_to, sicxToMint, sicxToMint + " sICX minted to " + _to);
         return sicxToMint;
     }
 
     @External
     public void transferUpdateDelegations(Address _from, Address _to, BigInteger _value) {
+        checkStatus(statusManager);
         stakingOn();
         if (!Context.getCaller().equals(sicxAddress.get())) {
             Context.revert(TAG + ": Only sicx token contract can call this function.");
