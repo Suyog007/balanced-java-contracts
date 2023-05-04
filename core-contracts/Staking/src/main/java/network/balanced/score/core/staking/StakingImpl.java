@@ -25,6 +25,7 @@ import network.balanced.score.core.staking.db.NodeDB;
 import network.balanced.score.core.staking.utils.Constant;
 import network.balanced.score.core.staking.utils.UnstakeDetails;
 import network.balanced.score.lib.interfaces.Staking;
+import network.balanced.score.lib.interfaces.SystemInterface;
 import network.balanced.score.lib.structs.PrepDelegations;
 import network.balanced.score.lib.utils.Names;
 import network.balanced.score.lib.utils.Versions;
@@ -43,12 +44,7 @@ import java.util.Map;
 import static network.balanced.score.core.staking.db.LinkedListDB.DEFAULT_NODE_ID;
 import static network.balanced.score.core.staking.utils.Checks.onlyOwner;
 import static network.balanced.score.core.staking.utils.Checks.stakingOn;
-import static network.balanced.score.core.staking.utils.Constant.FEE_ADDRESS;
-import static network.balanced.score.core.staking.utils.Constant.FEE_PERCENTAGE;
-import static network.balanced.score.core.staking.utils.Constant.OMM_LENDING_POOL_CORE;
 import static network.balanced.score.core.staking.utils.Constant.PRODUCTIVITY;
-import static network.balanced.score.core.staking.utils.Constant.STATUS_MANAGER;
-import static network.balanced.score.core.staking.utils.Constant.VERSION;
 import static network.balanced.score.lib.utils.Check.checkStatus;
 import static network.balanced.score.core.staking.utils.Constant.*;
 
@@ -413,6 +409,8 @@ public class StakingImpl implements Staking {
             BigInteger totalBlocks = (BigInteger) preps.get("totalBlocks");
             BigInteger validatedBlocks = (BigInteger) preps.get("validatedBlocks");
             BigInteger power = (BigInteger) preps.get("power");
+
+
             BigInteger prepProductivity = BigInteger.ZERO;
             if (totalBlocks.compareTo(BigInteger.ZERO) > 0) {
                 prepProductivity = validatedBlocks.multiply(ONE_EXA).multiply(HUNDRED).divide(totalBlocks);
@@ -523,7 +521,8 @@ public class StakingImpl implements Staking {
         Map<String, BigInteger> prepDelegations = prepDelegationInIcx.getOrDefault(DEFAULT_DELEGATION_LIST).toMap();
 
         if (balance.compareTo(BigInteger.ZERO) > 0) {
-            prepDelegations = subtractUserDelegationFromPrepDelegation(prepDelegations, previousDelegations, icxHoldPreviously);
+            prepDelegations = subtractUserDelegationFromPrepDelegation(prepDelegations, previousDelegations,
+                    icxHoldPreviously);
             prepDelegations = addUserDelegationToPrepDelegation(prepDelegations, newDelegations, icxHoldPreviously);
         }
         stakeAndDelegateInNetwork(totalStake.getOrDefault(BigInteger.ZERO), prepDelegations);
@@ -600,7 +599,8 @@ public class StakingImpl implements Staking {
     private void updateDelegationInNetwork(Map<String, BigInteger> prepDelegations, List<Address> topPreps,
                                            BigInteger totalStake) {
 
-        List<Map<String, Object>> networkDelegationList = new ArrayList<>();
+        List<SystemInterface.Delegation> networkDelegationList = new ArrayList<>();
+
         BigInteger icxPreferredToTopPreps = BigInteger.ZERO;
         for (Map.Entry<String, BigInteger> prepDelegation : prepDelegations.entrySet()) {
             Address prep = Address.fromString(prepDelegation.getKey());
@@ -610,7 +610,6 @@ public class StakingImpl implements Staking {
         }
 
         BigInteger equallyDistributableIcx = totalStake.subtract(icxPreferredToTopPreps);
-
         Map<String, BigInteger> ommDelegations =getActualUserDelegationPercentage(getOmmLendingPoolCore());
         BigInteger ommPrepsSize = BigInteger.valueOf(ommDelegations.size());
         for (String prep : ommDelegations.keySet()){
@@ -618,19 +617,41 @@ public class StakingImpl implements Staking {
             if (topPreps.contains(Address.fromString(prep))){
                 BigInteger currentAmount = prepDelegations.get(prep);
                 BigInteger value = currentAmount != null ? currentAmount.add(amountToAdd) : amountToAdd;
-                networkDelegationList.add(Map.of("address", prep, "value", value));
+                SystemInterface.Delegation delegation = new SystemInterface.Delegation();
+                delegation.address = Address.fromString(prep);
+                delegation.value = value;
+                networkDelegationList.add(delegation);
+
                 equallyDistributableIcx = equallyDistributableIcx.subtract(amountToAdd);
             }
         }
         if (equallyDistributableIcx.compareTo(BigInteger.ZERO)>0){
             BigInteger currentAmount = prepDelegations.get(topPreps.get(0).toString());
             BigInteger value = currentAmount != null ? currentAmount.add(equallyDistributableIcx) : equallyDistributableIcx;
-            networkDelegationList.add(Map.of("address",topPreps.get(0) , "value", value));
+            SystemInterface.Delegation delegation = new SystemInterface.Delegation();
+            Map<String,Object> contains = contains(topPreps.get(0),networkDelegationList);
+            if ((boolean) contains.get("contains")){
+                int index = (int)contains.get("index");
+                networkDelegationList.get(index).value = networkDelegationList.get(index).value.add(value);
+            }
+            else {
+                delegation.address = topPreps.get(0);
+                delegation.value = value;
+                networkDelegationList.add(delegation);
+            }
         }
 
         Context.call(SYSTEM_SCORE_ADDRESS, "setDelegation", networkDelegationList);
     }
 
+    private Map<String,Object> contains(Address prep, List<SystemInterface.Delegation >delegation){
+        for (int i = 0; i < delegation.size(); i++) {
+            if (delegation.get(i).address.equals(prep)){
+                return Map.of("contains",true,"index",i);
+            }
+        }
+        return Map.of("contains",false,"index",0);
+    }
     @External
     @Payable
     public BigInteger stakeICX(@Optional Address _to, @Optional byte[] _data) {

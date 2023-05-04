@@ -19,6 +19,7 @@ package network.balanced.score.lib.interfaces;
 import foundation.icon.score.client.ScoreClient;
 import foundation.icon.score.client.ScoreInterface;
 import score.Address;
+import score.annotation.Keep;
 import score.annotation.Payable;
 
 import java.math.BigInteger;
@@ -27,6 +28,12 @@ import java.util.Map;
 @ScoreClient
 @ScoreInterface
 public interface SystemInterface {
+    public class Delegation{
+        @Keep
+        public Address address;
+        @Keep
+        public BigInteger value;
+    }
     Map<String, Object> getIISSInfo();
 
     Map<String, Object> queryIScore(Address address);
