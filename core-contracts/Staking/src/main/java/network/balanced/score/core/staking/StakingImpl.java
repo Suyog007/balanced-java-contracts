@@ -612,17 +612,19 @@ public class StakingImpl implements Staking {
         BigInteger equallyDistributableIcx = totalStake.subtract(icxPreferredToTopPreps);
         Map<String, BigInteger> ommDelegations =getActualUserDelegationPercentage(getOmmLendingPoolCore());
         BigInteger ommPrepsSize = BigInteger.valueOf(ommDelegations.size());
-        for (String prep : ommDelegations.keySet()){
+        if (ommPrepsSize.compareTo(BigInteger.ZERO)>0){
             BigInteger amountToAdd = equallyDistributableIcx.divide(ommPrepsSize);
-            if (topPreps.contains(Address.fromString(prep))){
-                BigInteger currentAmount = prepDelegations.get(prep);
-                BigInteger value = currentAmount != null ? currentAmount.add(amountToAdd) : amountToAdd;
-                SystemInterface.Delegation delegation = new SystemInterface.Delegation();
-                delegation.address = Address.fromString(prep);
-                delegation.value = value;
-                networkDelegationList.add(delegation);
+            for (String prep : ommDelegations.keySet()){
+                if (topPreps.contains(Address.fromString(prep))){
+                    BigInteger currentAmount = prepDelegations.get(prep);
+                    BigInteger value = currentAmount != null ? currentAmount.add(amountToAdd) : amountToAdd;
+                    SystemInterface.Delegation delegation = new SystemInterface.Delegation();
+                    delegation.address = Address.fromString(prep);
+                    delegation.value = value;
+                    networkDelegationList.add(delegation);
 
-                equallyDistributableIcx = equallyDistributableIcx.subtract(amountToAdd);
+                    equallyDistributableIcx = equallyDistributableIcx.subtract(amountToAdd);
+                }
             }
         }
         if (equallyDistributableIcx.compareTo(BigInteger.ZERO)>0){
@@ -632,7 +634,7 @@ public class StakingImpl implements Staking {
             Map<String,Object> contains = contains(topPreps.get(0),networkDelegationList);
             if ((boolean) contains.get("contains")){
                 int index = (int)contains.get("index");
-                networkDelegationList.get(index).value = networkDelegationList.get(index).value.add(value);
+                networkDelegationList.get(index).value = networkDelegationList.get(index).value.add(equallyDistributableIcx);
             }
             else {
                 delegation.address = topPreps.get(0);
