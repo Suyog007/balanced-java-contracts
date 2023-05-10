@@ -24,6 +24,7 @@ import score.annotation.Payable;
 
 import java.math.BigInteger;
 import java.util.Map;
+import java.util.Objects;
 
 @ScoreClient
 @ScoreInterface
@@ -33,6 +34,19 @@ public interface SystemInterface {
         public Address address;
         @Keep
         public BigInteger value;
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            Delegation that = (Delegation) o;
+            return Objects.equals(address, that.address);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(address);
+        }
     }
     Map<String, Object> getIISSInfo();
 

@@ -51,6 +51,8 @@ class StakingTest extends TestBase {
     public static final Account alice = sm.createAccount();
     public static final Account governanceScore = Account.newScoreAccount(scoreAccountCount++);
     public static final Account sicx = Account.newScoreAccount(scoreAccountCount++);
+    public static final Account feeDistribution = Account.newScoreAccount(scoreAccountCount++);
+    public static final Account ommLendingPoolCore = Account.newScoreAccount(scoreAccountCount++);
     private final MockedStatic<Context> contextMock = Mockito.mockStatic(Context.class, Mockito.CALLS_REAL_METHODS);
 
     private Score staking;
@@ -60,12 +62,15 @@ class StakingTest extends TestBase {
     Map<String, Object> iissInfo = new HashMap<>();
     Map<String, Object> stake = new HashMap<>();
     Map<String, Object> iScore = new HashMap<>();
+
+    Map<String, Object> prepDict = new HashMap<>();
     BigInteger nextPrepTerm;
     BigInteger unlockPeriod;
 
     Verification getIISSInfo = () -> Context.call(SYSTEM_SCORE_ADDRESS, "getIISSInfo");
     Verification getPreps = () -> Context.call(SYSTEM_SCORE_ADDRESS, "getPReps", BigInteger.ONE,
             BigInteger.valueOf(100L));
+    Verification getPrep = () -> Context.call(eq(SYSTEM_SCORE_ADDRESS),eq("getPrep"),any(Address.class));
     Verification queryIscore = () -> Context.call(eq(SYSTEM_SCORE_ADDRESS), eq("queryIScore"), any(Address.class));
     Verification getStake = () -> Context.call(eq(SYSTEM_SCORE_ADDRESS), eq("getStake"), any(Address.class));
     Verification getUnstakeLockPeriod = () -> Context.call(SYSTEM_SCORE_ADDRESS, "estimateUnstakeLockPeriod");
@@ -83,6 +88,18 @@ class StakingTest extends TestBase {
         setupSicxScore();
 
         setupStakingScore();
+        setupFeeDistribution();
+    }
+
+    private void setupFeeDistribution(){
+        // Configure fee distribution contract
+        staking.invoke(owner,"setFeeDistributionAddress",feeDistribution.getAddress());
+
+        BigInteger feePercentage = new BigInteger("10").multiply(ONE_EXA);
+        doReturn(feePercentage).when(stakingSpy).getFeePercentage();
+
+        // Configure lending pool core contract
+        staking.invoke(owner,"setOmmLendingPoolCore",ommLendingPoolCore.getAddress());
     }
 
     private void setupStakingScore() throws Exception {
@@ -92,7 +109,6 @@ class StakingTest extends TestBase {
 
         // Configure Staking contract
         staking.invoke(owner, "setSicxAddress", sicx.getAddress());
-        staking.invoke(owner, "toggleStakingOn");
     }
 
     void setupSystemScore() {
@@ -118,6 +134,12 @@ class StakingTest extends TestBase {
 
         unlockPeriod = BigInteger.valueOf(8 * 43200L);
         contextMock.when(getUnstakeLockPeriod).thenReturn(Map.of("unstakeLockPeriod", unlockPeriod));
+
+        prepDict.put("totalBlocks",BigInteger.ZERO);
+        prepDict.put("validatedBlocks",BigInteger.ZERO);
+        prepDict.put("power",BigInteger.ZERO);
+        contextMock.when(() -> Context.call(eq(SYSTEM_SCORE_ADDRESS), eq("getPRep"),
+                any(Address.class))).thenReturn(prepDict);
     }
 
     void setupSicxScore() {
@@ -135,8 +157,12 @@ class StakingTest extends TestBase {
     void setupGetPrepsResponse() {
         prepsResponse.put("blockHeight", BigInteger.valueOf(123456L));
         List<Map<String, Object>> prepsList = new ArrayList<>();
-        for (int i = 0; i < 100; i++) {
-            prepsList.add(Map.of("address", sm.createAccount().getAddress()));
+        for (int i = 0; i < 100; i++) { // BigInteger.valueOf((int)(Math.random() * 1000)+1)
+            Map<String, Object> prep = Map.of("address", sm.createAccount().getAddress(),
+                    "totalBlocks", BigInteger.valueOf(1000),
+                    "validatedBlocks",BigInteger.valueOf(950),
+                    "power", BigInteger.valueOf(10));
+            prepsList.add(prep);
         }
         prepsResponse.put("preps", prepsList);
     }
@@ -187,7 +213,9 @@ class StakingTest extends TestBase {
                 new byte[0]);
 
         assertEquals(extraICXBalance, staking.call("getLifetimeReward"));
-        BigInteger newRate = sicxTotalSupply.add(extraICXBalance).multiply(ICX).divide(sicxTotalSupply);
+        BigInteger fee = BigInteger.valueOf(10).multiply(ICX).multiply(extraICXBalance).
+                divide(BigInteger.valueOf(100).multiply(ICX));
+        BigInteger newRate = sicxTotalSupply.add(extraICXBalance.subtract(fee)).multiply(ICX).divide(sicxTotalSupply);
         assertEquals(newRate, staking.call("getTodayRate"));
 
         contextMock.when(() -> Context.getBalance(staking.getAddress())).thenReturn(stakeAmount);
@@ -259,7 +287,8 @@ class StakingTest extends TestBase {
         // Calling from contracts other than sicx fails
         Executable callNotFromSicx = () -> staking.invoke(owner, "tokenFallback", owner.getAddress(),
                 ICX.multiply(BigInteger.ONE), new byte[0]);
-        String expectedErrorMessage =  "Reverted(0): Staked ICX Manager: The Staking contract only accepts sICX tokens.: " +
+        String expectedErrorMessage = "Reverted(0): Staked ICX Manager: The Staking contract only accepts sICX tokens" +
+                ".: " +
                 sicx.getAddress().toString();
         expectErrorMessage(callNotFromSicx, expectedErrorMessage);
 
@@ -336,7 +365,10 @@ class StakingTest extends TestBase {
         sm.call(owner, stakeAmount, staking.getAddress(), "stakeICX", new Address(new byte[Address.LENGTH]),
                 new byte[0]);
         totalStaked = totalStaked.add(extraICXBalance).add(stakeAmount);
-        assertEquals(totalStaked, staking.call("getTotalStake"));
+
+        BigInteger fee = BigInteger.valueOf(10000).multiply(ICX);
+        assertEquals(extraICXBalance,staking.call("getLifetimeReward"));
+        assertEquals(totalStaked.subtract(fee), staking.call("getTotalStake"));
     }
 
     @SuppressWarnings("unchecked")
@@ -403,6 +435,7 @@ class StakingTest extends TestBase {
                 new byte[0]);
         doReturn(totalStaked).when(stakingSpy).getTotalStake();
 
+        // right here
         BigInteger topPrepsCount = BigInteger.valueOf(topPreps.size());
         BigInteger amountToBeDistributed = stakedAmount;
         for (Address prep : topPreps) {
@@ -520,17 +553,19 @@ class StakingTest extends TestBase {
 
         doReturn(BigInteger.TEN).when(stakingSpy).claimableICX(any(Address.class));
         doReturn(BigInteger.TWO).when(stakingSpy).totalClaimableIcx();
-        String expectedErrorMessage ="Reverted(0): Staked ICX Manager: No sufficient icx to claim. Requested: 10 Available: 2";
+        String expectedErrorMessage = "Reverted(0): Staked ICX Manager: No sufficient icx to claim. Requested: 10 " +
+                "Available: 2";
         Executable claimMoreThanAvailable = () -> staking.invoke(owner, "claimUnstakedICX", owner.getAddress());
         expectErrorMessage(claimMoreThanAvailable, expectedErrorMessage);
 
         doReturn(icxPayable).when(stakingSpy).claimableICX(any(Address.class));
         doReturn(icxToClaim).when(stakingSpy).totalClaimableIcx();
 
-        contextMock.when(()->Context.transfer(any(Address.class), any(BigInteger.class))).then(invocationOnMock -> null);
+        contextMock.when(() -> Context.transfer(any(Address.class), any(BigInteger.class))).then(invocationOnMock -> null);
 
         staking.invoke(owner, "claimUnstakedICX", owner.getAddress());
-        verify(stakingSpy).FundTransfer(owner.getAddress(), icxPayable, icxPayable + " ICX sent to " + owner.getAddress() + ".");
+        verify(stakingSpy).FundTransfer(owner.getAddress(), icxPayable,
+                icxPayable + " ICX sent to " + owner.getAddress() + ".");
         contextMock.verify(() -> Context.transfer(owner.getAddress(), icxPayable));
     }
 
@@ -543,19 +578,21 @@ class StakingTest extends TestBase {
 
         Executable duplicatePrep = () -> staking.invoke(owner, "delegate", (Object) new PrepDelegations[]{delegation,
                 delegation});
-        String expectedErrorMessage = "Reverted(0): Staked ICX Manager: You can not delegate same P-Rep twice in a transaction.";
+        String expectedErrorMessage = "Reverted(0): Staked ICX Manager: You can not delegate same P-Rep twice in a " +
+                "transaction.";
         expectErrorMessage(duplicatePrep, expectedErrorMessage);
 
         delegation._votes_in_per = BigInteger.TEN;
         Executable voteLessThanMinimum = () -> staking.invoke(owner, "delegate",
                 (Object) new PrepDelegations[]{delegation});
-        expectedErrorMessage = "Reverted(0): Staked ICX Manager: You should provide delegation percentage more than 0.001%.";
+        expectedErrorMessage = "Reverted(0): Staked ICX Manager: You should provide delegation percentage more than 0" +
+                ".001%.";
         expectErrorMessage(voteLessThanMinimum, expectedErrorMessage);
 
         delegation._votes_in_per = HUNDRED_PERCENTAGE.subtract(BigInteger.ONE);
         Executable totalLessThanHundred = () -> staking.invoke(owner, "delegate",
                 (Object) new PrepDelegations[]{delegation});
-        expectedErrorMessage ="Reverted(0): Staked ICX Manager: Total delegations should be 100%.";
+        expectedErrorMessage = "Reverted(0): Staked ICX Manager: Total delegations should be 100%.";
         expectErrorMessage(totalLessThanHundred, expectedErrorMessage);
     }
 
@@ -594,7 +631,8 @@ class StakingTest extends TestBase {
         unstakes.add(unstakeList);
         contextMock.when(getStake).thenReturn(Map.of("unstakes", unstakes));
 
-        sm.call(sm.createAccount(), BigInteger.TEN, staking.getAddress(), "stakeICX", new Address(new byte[Address.LENGTH]), new byte[0]);
+        sm.call(sm.createAccount(), BigInteger.TEN, staking.getAddress(), "stakeICX",
+                new Address(new byte[Address.LENGTH]), new byte[0]);
         totalUnstaked = totalUnstaked.subtract(BigInteger.TEN);
         assertEquals(totalUnstaked, staking.call("getUnstakingAmount"));
         assertEquals(BigInteger.TEN, staking.call("claimableICX", owner.getAddress()));
@@ -617,7 +655,180 @@ class StakingTest extends TestBase {
     }
 
     @Test
+    public void stakeICX_to_highest_rank_prep_only(){
+        Map<String, Object> prepDict = new HashMap<>();
+        prepDict.put("totalBlocks",BigInteger.valueOf(100));
+        prepDict.put("validatedBlocks",BigInteger.valueOf(80));
+        prepDict.put("power",BigInteger.valueOf(10));
+
+        Account newPrep = sm.createAccount();
+        // prep delegation list
+        // _data = new byte[0]
+        doReturn(Map.of()).when(stakingSpy).getActualUserDelegationPercentage(any(Address.class));
+
+        contextMock.when(() -> Context.call(eq(SYSTEM_SCORE_ADDRESS), eq("getPRep"),
+                any(Address.class))).thenReturn(prepDict);
+
+        Account caller = sm.createAccount();
+        sm.call(caller, BigInteger.valueOf(12).multiply(ICX), staking.getAddress(), "stakeICX",
+                new Address(new byte[Address.LENGTH]), new byte[0]);
+
+
+        assertEquals(Map.of(),staking.call("getActualUserDelegationPercentage",caller.getAddress()));
+    }
+
+    @Test
+    public void stakeICX_to_userDelegations(){
+        Map<String, Object> prepDict = new HashMap<>();
+        prepDict.put("totalBlocks",BigInteger.valueOf(100));
+        prepDict.put("validatedBlocks",BigInteger.valueOf(80));
+        prepDict.put("power",BigInteger.valueOf(10));
+
+        PrepDelegations[] prepDelegations = getPrepDelegations1(4);
+        // prep delegation list
+        // _data = new byte[0]
+
+        contextMock.when(() -> Context.call(eq(SYSTEM_SCORE_ADDRESS), eq("getPRep"),
+                any(Address.class))).thenReturn(prepDict);
+
+        Account caller = sm.createAccount();
+        BigInteger amountToStake = BigInteger.valueOf(12).multiply(ICX);
+        sm.call(caller, amountToStake, staking.getAddress(), "stakeICX",
+                new Address(new byte[Address.LENGTH]), new byte[0]);
+
+        assertEquals(amountToStake,staking.call("getTotalStake"));
+
+        contextMock.when(() -> Context.call(sicx.getAddress(),"balanceOf",
+                caller.getAddress())).thenReturn(amountToStake);
+
+        staking.invoke(caller, "delegate", (Object) prepDelegations);
+
+        Map<String, BigInteger> expectedDelegation = new HashMap<>();
+        Map<String, BigInteger> actualUserDelegation = new HashMap<>();
+        for (PrepDelegations delegation : prepDelegations) {
+            actualUserDelegation.put(delegation._address.toString(), BigInteger.valueOf(25).multiply(ICX));
+        }
+
+        assertEquals(actualUserDelegation,staking.call("getActualUserDelegationPercentage",caller.getAddress()));
+    }
+
+    @Test
+    public void userDelegations_not_in_top_prep(){
+        // delegates to only for omm Prep
+
+        PrepDelegations delegation = new PrepDelegations();
+        delegation._address = sm.createAccount().getAddress();
+        delegation._votes_in_per = HUNDRED_PERCENTAGE;
+        List<Map<String, Object>> prepsList = (List<Map<String, Object>>) prepsResponse.get("preps");
+        String ommPrep = prepsList.get(0).get("address").toString();
+        String ommPrep2 = prepsList.get(1).get("address").toString();
+
+        BigInteger hundredPercentage = BigInteger.valueOf(100).multiply(ICX).divide(BigInteger.valueOf(100));
+        doReturn(Map.of(
+                ommPrep,hundredPercentage.divide(BigInteger.TWO),
+                ommPrep2,hundredPercentage.divide(BigInteger.TWO)
+        )).when(stakingSpy).getActualUserDelegationPercentage(any(Address.class));
+
+        Account caller = sm.createAccount();
+        BigInteger amountToStake = BigInteger.valueOf(12).multiply(ICX);
+        sm.call(caller, amountToStake, staking.getAddress(), "stakeICX",
+                new Address(new byte[Address.LENGTH]), new byte[0]);
+
+        assertEquals(amountToStake,staking.call("getTotalStake"));
+
+        contextMock.when(() -> Context.call(sicx.getAddress(),"balanceOf",
+                caller.getAddress())).thenReturn(amountToStake);
+
+        staking.invoke(caller, "delegate", (Object) new PrepDelegations[]{delegation});
+
+
+        Map<String, BigInteger> actualUserDelegation = new HashMap<>();
+        actualUserDelegation.put(ommPrep,ICX.divide(BigInteger.TWO));
+        actualUserDelegation.put(ommPrep2,ICX.divide(BigInteger.TWO));
+        assertEquals(actualUserDelegation,staking.call("getActualUserDelegationPercentage",caller.getAddress()));
+
+    }
+
+    @Test
+    public void delegate_delegations(){
+        // user delegation contains 1 topPrep,1 not a top prep
+        // omm contributrs contain 2 preps in which 1 is not a top prep
+        // remaining icx should be given to top prep with the highest rank
+
+        List<Map<String, Object>> prepsList = (List<Map<String, Object>>) prepsResponse.get("preps");
+         PrepDelegations delegation = new PrepDelegations();
+        delegation._address = sm.createAccount().getAddress();
+        delegation._votes_in_per = HUNDRED_PERCENTAGE.divide(BigInteger.TWO);
+
+        PrepDelegations delegations2 = new PrepDelegations();
+        delegations2._address = (Address) prepsList.get(0).get("address");
+        delegations2._votes_in_per = HUNDRED_PERCENTAGE.divide(BigInteger.TWO);
+
+        String ommPrep = prepsList.get(0).get("address").toString();
+        String ommPrep2 = sm.createAccount().getAddress().toString();
+
+        doReturn(Map.of(
+                ommPrep,HUNDRED_PERCENTAGE.divide(BigInteger.TWO),
+                ommPrep2,HUNDRED_PERCENTAGE.divide(BigInteger.TWO)
+        )).when(stakingSpy).getActualUserDelegationPercentage(any(Address.class));
+
+
+        Account caller = sm.createAccount();
+        BigInteger amountToStake = BigInteger.valueOf(12).multiply(ICX);
+        sm.call(caller, amountToStake, staking.getAddress(), "stakeICX",
+                new Address(new byte[Address.LENGTH]), new byte[0]);
+
+        assertEquals(amountToStake,staking.call("getTotalStake"));
+
+        contextMock.when(() -> Context.call(sicx.getAddress(),"balanceOf",
+                caller.getAddress())).thenReturn(amountToStake);
+
+        staking.invoke(caller, "delegate", (Object) new PrepDelegations[]{delegation,delegations2});
+    }
+
+
+    private PrepDelegations[] getPrepDelegations1(int n) {
+        // 100 % n = 0
+        PrepDelegations[] delegations = new PrepDelegations[n];
+        BigInteger val = HUNDRED_PERCENTAGE.divide(BigInteger.valueOf(n));
+        List<Map<String, Object>> prepList = (List<Map<String, Object>>) prepsResponse.get("preps");
+        for (int i = 0; i < n; i++) {
+            PrepDelegations prepDelegation = new PrepDelegations();
+            prepDelegation._address= (Address) prepList.get(i).get("address");
+            prepDelegation._votes_in_per=val;
+            delegations[i] = prepDelegation;
+        }
+        return delegations;
+
+    }
+
+    @Test
     void stakeICX() {
+        Map<String, Object> prepDict = new HashMap<>();
+        prepDict.put("totalBlocks",BigInteger.valueOf(100));
+        prepDict.put("validatedBlocks",BigInteger.valueOf(80));
+        prepDict.put("power",BigInteger.valueOf(10));
+
+        Account newPrep = sm.createAccount();
+        Address prep = newPrep.getAddress();
+
+        Address prep2 = sm.createAccount().getAddress();
+        Address prep3 = sm.createAccount().getAddress();
+        Address prep4 = sm.createAccount().getAddress();
+        // prep delegation list
+        // _data = new byte[0]
+        doReturn(Map.of(
+                prep.toString(),ICX.divide(BigInteger.valueOf(4)),
+                prep2.toString(),ICX.divide(BigInteger.valueOf(4)),
+                prep3.toString(),ICX.divide(BigInteger.valueOf(4)),
+                prep4.toString(),ICX.divide(BigInteger.valueOf(4))
+        )).when(stakingSpy).getActualUserDelegationPercentage(any(Address.class));
+
+        contextMock.when(() -> Context.call(eq(SYSTEM_SCORE_ADDRESS), eq("getPRep"),
+                any(Address.class))).thenReturn(prepDict);
+
+        sm.call(sm.createAccount(), BigInteger.valueOf(12).multiply(ICX), staking.getAddress(), "stakeICX",
+                new Address(new byte[Address.LENGTH]), new byte[0]);
 
     }
 
