@@ -626,7 +626,6 @@ public class StakingImpl implements Staking {
         BigInteger remaining = equallyDistributableIcx;
         if (ommPrepsSize.compareTo(BigInteger.ZERO)>0){
             for (String prep : ommDelegations.keySet()){
-                System.out.println("second stop ");
                 if (topPreps.contains(Address.fromString(prep))){
                     BigInteger delgatedPercentage = ommDelegations.get(prep);
                     BigInteger amountToAdd = equallyDistributableIcx.multiply(delgatedPercentage).divide(ONE_EXA); // calclate percentage
@@ -641,9 +640,7 @@ public class StakingImpl implements Staking {
                 }
             }
         }
-        System.out.println(remaining);
         if (remaining.compareTo(BigInteger.ZERO)>0){
-            System.out.println("third stop ");
             BigInteger currentAmount = prepDelegations.get(topPreps.get(0).toString());
             BigInteger value = currentAmount != null ? currentAmount.add(remaining) : remaining;
             SystemInterface.Delegation delegation = new SystemInterface.Delegation();

@@ -756,7 +756,7 @@ class StakingTest extends TestBase {
         // remaining icx should be given to top prep with the highest rank
 
         List<Map<String, Object>> prepsList = (List<Map<String, Object>>) prepsResponse.get("preps");
-         PrepDelegations delegation = new PrepDelegations();
+        PrepDelegations delegation = new PrepDelegations();
         delegation._address = sm.createAccount().getAddress();
         delegation._votes_in_per = HUNDRED_PERCENTAGE.divide(BigInteger.TWO);
 
@@ -764,17 +764,17 @@ class StakingTest extends TestBase {
         delegations2._address = (Address) prepsList.get(0).get("address");
         delegations2._votes_in_per = HUNDRED_PERCENTAGE.divide(BigInteger.TWO);
 
+        BigInteger hundredPercentage = BigInteger.valueOf(100).multiply(ICX).divide(BigInteger.valueOf(100));
         String ommPrep = prepsList.get(0).get("address").toString();
         String ommPrep2 = sm.createAccount().getAddress().toString();
-
         doReturn(Map.of(
-                ommPrep,HUNDRED_PERCENTAGE.divide(BigInteger.TWO),
-                ommPrep2,HUNDRED_PERCENTAGE.divide(BigInteger.TWO)
+                ommPrep,hundredPercentage.divide(BigInteger.TWO),
+                ommPrep2,hundredPercentage.divide(BigInteger.TWO)
         )).when(stakingSpy).getActualUserDelegationPercentage(any(Address.class));
 
 
         Account caller = sm.createAccount();
-        BigInteger amountToStake = BigInteger.valueOf(12).multiply(ICX);
+        BigInteger amountToStake = BigInteger.valueOf(10).multiply(ICX);
         sm.call(caller, amountToStake, staking.getAddress(), "stakeICX",
                 new Address(new byte[Address.LENGTH]), new byte[0]);
 
@@ -784,6 +784,12 @@ class StakingTest extends TestBase {
                 caller.getAddress())).thenReturn(amountToStake);
 
         staking.invoke(caller, "delegate", (Object) new PrepDelegations[]{delegation,delegations2});
+
+        Map<String, BigInteger> actualUserDelegation = new HashMap<>();
+        actualUserDelegation.put(ommPrep2,ICX.divide(BigInteger.TWO));
+        actualUserDelegation.put(delegations2._address.toString(),ICX.divide(BigInteger.TWO));
+        assertEquals(actualUserDelegation,staking.call("getActualUserDelegationPercentage",caller.getAddress()));
+
     }
 
 
