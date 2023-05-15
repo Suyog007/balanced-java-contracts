@@ -36,12 +36,10 @@ import score.annotation.Optional;
 import score.annotation.Payable;
 import scorex.util.ArrayList;
 import scorex.util.HashMap;
-import scorex.util.HashSet;
 
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import static network.balanced.score.core.staking.db.LinkedListDB.DEFAULT_NODE_ID;
 import static network.balanced.score.core.staking.utils.Checks.onlyOwner;
@@ -603,41 +601,52 @@ public class StakingImpl implements Staking {
     }
 
     private void updateDelegationInNetwork(Map<String, BigInteger> prepDelegations, List<Address> topPreps,
-                                           BigInteger totalStake) {
-
-        Set<SystemInterface.Delegation> networkDelegationList = new HashSet<>();
-
+                                           BigInteger totalStake){
+        Map<String,SystemInterface.Delegation> networkDelegationMap = new HashMap<>();
 
         BigInteger icxPreferredToTopPreps = BigInteger.ZERO;
-        for (Map.Entry<String, BigInteger> prepDelegation : prepDelegations.entrySet()) {
+        for (Map.Entry<String, BigInteger> prepDelegation:prepDelegations.entrySet()) {
             Address prep = Address.fromString(prepDelegation.getKey());
-            if (topPreps.contains(prep)) {
-
+            if (topPreps.contains(prep)){
                 icxPreferredToTopPreps = icxPreferredToTopPreps.add(prepDelegation.getValue());
+
                 SystemInterface.Delegation delegation = new SystemInterface.Delegation();
                 delegation.address = prep;
                 delegation.value = prepDelegation.getValue();
-                networkDelegationList.add(delegation);
+
+                networkDelegationMap.put(prep.toString(),delegation);
             }
         }
 
         BigInteger equallyDistributableIcx = totalStake.subtract(icxPreferredToTopPreps);
+
         Map<String, BigInteger> ommDelegations =getActualUserDelegationPercentage(getOmmLendingPoolCore());
-        BigInteger ommPrepsSize = BigInteger.valueOf(ommDelegations.size());
+        BigInteger ommPrepSize = BigInteger.valueOf(ommDelegations.size());
         BigInteger remaining = equallyDistributableIcx;
-        if (ommPrepsSize.compareTo(BigInteger.ZERO)>0){
-            for (String prep : ommDelegations.keySet()){
-                if (topPreps.contains(Address.fromString(prep))){
-                    BigInteger delgatedPercentage = ommDelegations.get(prep);
+        if (ommPrepSize.compareTo(BigInteger.ZERO)>0){
+            for (Map.Entry<String, BigInteger> prepSet : ommDelegations.entrySet()){
+                Address prep = Address.fromString(prepSet.getKey());
+                if (topPreps.contains(prep)){
 
-                    BigInteger amountToAdd = equallyDistributableIcx.multiply(delgatedPercentage).divide(HUNDRED_PERCENTAGE); // calclate percentage
-                    BigInteger currentAmount = prepDelegations.get(prep);
+                    BigInteger percentageDelegation = prepSet.getValue();
+                    BigInteger amountToAdd = equallyDistributableIcx.multiply(percentageDelegation).divide(HUNDRED_PERCENTAGE);
+                    BigInteger currentAmount = prepDelegations.get(prep.toString());
                     BigInteger value = currentAmount != null ? currentAmount.add(amountToAdd) : amountToAdd;
-                    SystemInterface.Delegation delegation = new SystemInterface.Delegation();
-                    delegation.address = Address.fromString(prep);
-                    delegation.value = value;
-                    networkDelegationList.add(delegation);
+                    Context.println("added preps ");
+                    if (networkDelegationMap.containsKey(prep.toString())){
+                        SystemInterface.Delegation delegation = networkDelegationMap.get(prep.toString());
 
+                        BigInteger previousDelgation = delegation.value;
+                        delegation.address = prep;
+                        delegation.value=previousDelgation.add(amountToAdd);
+                        networkDelegationMap.put(prep.toString(),delegation);
+                    }
+                    else {
+                        SystemInterface.Delegation delegation = new SystemInterface.Delegation();
+                        delegation.address = prep;
+                        delegation.value = value;
+                        networkDelegationMap.put(prep.toString(),delegation);
+                    }
                     remaining = remaining.subtract(amountToAdd);
                 }
             }
@@ -645,19 +654,33 @@ public class StakingImpl implements Staking {
         if (remaining.compareTo(BigInteger.ZERO)>0){
             BigInteger currentAmount = prepDelegations.get(topPreps.get(0).toString());
             BigInteger value = currentAmount != null ? currentAmount.add(remaining) : remaining;
-            SystemInterface.Delegation delegation = new SystemInterface.Delegation();
 
-            delegation.address = topPreps.get(0);
-            delegation.value = value;
-            networkDelegationList.add(delegation);
+            Address topPrep = topPreps.get(0);
+            if (networkDelegationMap.containsKey(topPrep.toString())){
+                SystemInterface.Delegation delegation = networkDelegationMap.get(topPrep.toString());
 
+                BigInteger previousDelgation = delegation.value;
+                delegation.address = topPrep;
+                delegation.value=previousDelgation.add(remaining);
+                networkDelegationMap.put(topPrep.toString(),delegation);
+            }
+            else {
+                SystemInterface.Delegation delegation = new SystemInterface.Delegation();
+                delegation.address = topPrep;
+                delegation.value = value;
+                networkDelegationMap.put(topPrep.toString(),delegation);
+            }
         }
 
         List<SystemInterface.Delegation> finalNetworkDelegations = new ArrayList<>();
-        for (SystemInterface.Delegation delegation :networkDelegationList) {
-            finalNetworkDelegations.add(delegation); // -> getPrepDelegation
+        for (Map.Entry<String, SystemInterface.Delegation> networkDelegation : networkDelegationMap.entrySet()){
+            SystemInterface.Delegation value = networkDelegation.getValue();
+            finalNetworkDelegations.add(value);
         }
+
         Context.call(SYSTEM_SCORE_ADDRESS, "setDelegation",finalNetworkDelegations);
+
+
     }
 
     @External
