@@ -294,17 +294,32 @@ public class StakingImpl implements Staking {
         }
         BigInteger totalStake = getTotalStake();
         BigInteger unspecifiedICX = totalStake.subtract(specifiedIcxSum);
+        Map<String, BigInteger> ommDelegations =getActualUserDelegationPercentage(getOmmLendingPoolCore());
+        BigInteger ommPrepSize = BigInteger.valueOf(ommDelegations.size());
+        BigInteger remaining = unspecifiedICX;
         List<Address> topPreps = getTopPreps();
-        BigInteger topPrepsCount = BigInteger.valueOf(topPreps.size());
+
+        BigInteger topPrepSpecification =BigInteger.ZERO;
         Map<String, BigInteger> allPrepDelegations = new HashMap<>();
-        for (Address prep : topPreps) {
-            BigInteger finalAmount = prepDelegationInIcx.get(prep.toString());
-            finalAmount = finalAmount == null ? BigInteger.ZERO : finalAmount;
-            BigInteger amountToAdd = unspecifiedICX.divide(topPrepsCount);
-            finalAmount = finalAmount.add(amountToAdd);
-            unspecifiedICX = unspecifiedICX.subtract(amountToAdd);
-            topPrepsCount = topPrepsCount.subtract(BigInteger.ONE);
-            allPrepDelegations.put(prep.toString(), finalAmount);
+        if (ommPrepSize.compareTo(BigInteger.ZERO)>0){
+            for (Map.Entry<String, BigInteger> prepSet : ommDelegations.entrySet()){
+                Address prep = Address.fromString(prepSet.getKey());
+                if (topPreps.contains(prep)){
+
+                    BigInteger percentageDelegation = prepSet.getValue();
+                    BigInteger amountToAdd = unspecifiedICX.multiply(percentageDelegation).divide(HUNDRED_PERCENTAGE);
+
+                    remaining = remaining.subtract(amountToAdd);
+                    if (prep.toString().equals(topPreps.get(0).toString())){
+                        topPrepSpecification=amountToAdd;
+                    }
+                    allPrepDelegations.put(prep.toString(),amountToAdd);
+                }
+            }
+        }
+
+        if (remaining.compareTo(BigInteger.ZERO)>0){
+            allPrepDelegations.put(topPreps.get(0).toString(), remaining.add(topPrepSpecification));
         }
 
         for (Address prep : addressInSpecification) {
