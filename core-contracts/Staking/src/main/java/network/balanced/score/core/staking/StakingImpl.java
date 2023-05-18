@@ -327,7 +327,7 @@ public class StakingImpl implements Staking {
     }
 
     @External(readonly = true)
-    public Map<String, BigInteger> getNetworkActualDelegations() {
+    public Map<String, BigInteger> getActualDelegationInNetwork() {
         Map<String, BigInteger> prepDelegationInIcx =
                 this.prepDelegationInIcx.getOrDefault(DEFAULT_DELEGATION_LIST).toMap();
         List<Address> topPreps = getTopPreps();
@@ -668,8 +668,8 @@ public class StakingImpl implements Staking {
                 .subtract(icxToClaim.getOrDefault(BigInteger.ZERO));
 
         // If there is I-Score generated then update the rate
-        if (dailyReward.compareTo(BigInteger.ZERO) > 0) { // TEST case : integration
-            BigInteger feeAmt = getFeePercentage().multiply(dailyReward).divide(HUNDRED_PERCENTAGE);
+        if (dailyReward.compareTo(BigInteger.ZERO) > 0) {
+            BigInteger feeAmt = getFeePercentage().multiply(dailyReward).divide(HUNDRED_PERCENTAGE);// TODO:how to handle this feeAmount
             BigInteger sicxToMint = (ONE_EXA.multiply(feeAmt)).divide(getTodayRate());
             Context.call(sicxAddress.get(), "mintTo", getFeeDistributionAddress(), sicxToMint,
                     "staking fee".getBytes());

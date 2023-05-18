@@ -407,9 +407,7 @@ class StakingTest extends TestBase {
         Map<String, BigInteger> actualPrepDelegation = new HashMap<>();
         List<Address> topPreps = (List<Address>) staking.call("getTopPreps");
         Map<String, BigInteger> expectedPrepDelegations = new HashMap<>();
-        for (Address prep : topPreps) {
-            expectedPrepDelegations.put(prep.toString(), BigInteger.ZERO);
-        }
+
         assertEquals(expectedPrepDelegations, staking.call("getPrepDelegations"));
         assertEquals(Map.of(), staking.call("getActualPrepDelegations"));
 
@@ -435,27 +433,20 @@ class StakingTest extends TestBase {
                 new byte[0]);
         doReturn(totalStaked).when(stakingSpy).getTotalStake();
 
-        // right here
-        BigInteger topPrepsCount = BigInteger.valueOf(topPreps.size());
-        BigInteger amountToBeDistributed = stakedAmount;
-        for (Address prep : topPreps) {
-            BigInteger prepAmount = amountToBeDistributed.divide(topPrepsCount);
-            expectedPrepDelegations.put(prep.toString(), prepAmount);
-            amountToBeDistributed = amountToBeDistributed.subtract(prepAmount);
-            topPrepsCount = topPrepsCount.subtract(BigInteger.ONE);
-        }
+        Address topRankPrep = topPreps.get(0);
+        expectedPrepDelegations.put(topRankPrep.toString(), stakedAmount);
+
         assertEquals(expectedPrepDelegations, staking.call("getPrepDelegations"));
         assertEquals(actualPrepDelegation, staking.call("getActualPrepDelegations"));
 
-        // All preference to first prep from alice
-        delegation._address = topPreps.get(0);
+        // All preference to tenth prep from alice
+        delegation._address = topPreps.get(10);
         contextMock.when(sicxBalanceOf).thenReturn(stakedAmount);
         staking.invoke(alice, "delegate", (Object) new PrepDelegations[]{delegation});
-        expectedPrepDelegations.put(topPreps.get(0).toString(), stakedAmount);
-        for (int i = 1; i < topPreps.size(); i++) {
-            expectedPrepDelegations.put(topPreps.get(i).toString(), BigInteger.ZERO);
-        }
-        actualPrepDelegation.put(topPreps.get(0).toString(), stakedAmount);
+        expectedPrepDelegations.remove(topPreps.get(0).toString());
+        expectedPrepDelegations.put(topPreps.get(10).toString(), stakedAmount);
+
+        actualPrepDelegation.put(topPreps.get(10).toString(), stakedAmount);
         assertEquals(expectedPrepDelegations, staking.call("getPrepDelegations"));
         assertEquals(actualPrepDelegation, staking.call("getActualPrepDelegations"));
     }
@@ -655,41 +646,58 @@ class StakingTest extends TestBase {
     }
 
     @Test
-    public void stakeICX_to_highest_rank_prep_only(){
-        Map<String, Object> prepDict = new HashMap<>();
-        prepDict.put("totalBlocks",BigInteger.valueOf(100));
-        prepDict.put("validatedBlocks",BigInteger.valueOf(80));
-        prepDict.put("power",BigInteger.valueOf(10));
-
-        Account newPrep = sm.createAccount();
-        // prep delegation list
-        // _data = new byte[0]
-        doReturn(Map.of()).when(stakingSpy).getActualUserDelegationPercentage(any(Address.class));
-
-        contextMock.when(() -> Context.call(eq(SYSTEM_SCORE_ADDRESS), eq("getPRep"),
-                any(Address.class))).thenReturn(prepDict);
+    public void stakeICXOmmDelegationsIsPresent(){
+        List<Address> topPreps = (List<Address>) staking.call("getTopPreps");
+        Address ommLendingPoolCore= Account.newScoreAccount(1).getAddress();
+        doReturn(ommLendingPoolCore).when(stakingSpy).getOmmLendingPoolCore();
+        doReturn(Map.of(
+                topPreps.get(4).toString(),BigInteger.valueOf(500000000000000000L).multiply(BigInteger.valueOf(100)),
+                topPreps.get(5).toString(),BigInteger.valueOf(500000000000000000L).multiply(BigInteger.valueOf(100))
+        )).when(stakingSpy).getActualUserDelegationPercentage(ommLendingPoolCore);
 
         Account caller = sm.createAccount();
         sm.call(caller, BigInteger.valueOf(12).multiply(ICX), staking.getAddress(), "stakeICX",
                 new Address(new byte[Address.LENGTH]), new byte[0]);
 
+        Map<String,BigInteger> expectedDelegations = new HashMap<>();
+        expectedDelegations.put(topPreps.get(4).toString(),BigInteger.valueOf(6).multiply(ICX));
+        expectedDelegations.put(topPreps.get(5).toString(),BigInteger.valueOf(6).multiply(ICX));
 
-        assertEquals(Map.of(),staking.call("getActualUserDelegationPercentage",caller.getAddress()));
+        assertEquals(expectedDelegations,staking.call("getPrepDelegations"));
+        assertEquals(Map.of(),staking.call("getAddressDelegations",caller.getAddress()));
+    }
+
+    @Test
+    public void stakeICXNotInTopPrep(){
+        // the omm delegation preference does not lie in top prep list
+        // the remaining delegation goes to topPrep with highest rank
+        List<Address> topPreps = (List<Address>) staking.call("getTopPreps");
+        Address ommLendingPoolCore= Account.newScoreAccount(1).getAddress();
+        doReturn(ommLendingPoolCore).when(stakingSpy).getOmmLendingPoolCore();
+        doReturn(Map.of(
+                topPreps.get(4).toString(),BigInteger.valueOf(500000000000000000L).multiply(BigInteger.valueOf(100)),
+                ommLendingPoolCore.toString(),BigInteger.valueOf(500000000000000000L).multiply(BigInteger.valueOf(100))
+        )).when(stakingSpy).getActualUserDelegationPercentage(ommLendingPoolCore);
+
+        Account caller = sm.createAccount();
+        sm.call(caller, BigInteger.valueOf(12).multiply(ICX), staking.getAddress(), "stakeICX",
+                new Address(new byte[Address.LENGTH]), new byte[0]);
+
+        Map<String,BigInteger> expectedDelegations = new HashMap<>();
+        expectedDelegations.put(topPreps.get(4).toString(),BigInteger.valueOf(6).multiply(ICX));
+        expectedDelegations.put(topPreps.get(0).toString(),BigInteger.valueOf(6).multiply(ICX));
+
+        assertEquals(expectedDelegations,staking.call("getPrepDelegations"));
+        assertEquals(Map.of(),staking.call("getAddressDelegations",caller.getAddress()));
+
     }
 
     @Test
     public void stakeICX_to_userDelegations(){
-        Map<String, Object> prepDict = new HashMap<>();
-        prepDict.put("totalBlocks",BigInteger.valueOf(100));
-        prepDict.put("validatedBlocks",BigInteger.valueOf(80));
-        prepDict.put("power",BigInteger.valueOf(10));
 
         PrepDelegations[] prepDelegations = getPrepDelegations1(4);
         // prep delegation list
         // _data = new byte[0]
-
-        contextMock.when(() -> Context.call(eq(SYSTEM_SCORE_ADDRESS), eq("getPRep"),
-                any(Address.class))).thenReturn(prepDict);
 
         Account caller = sm.createAccount();
         BigInteger amountToStake = BigInteger.valueOf(12).multiply(ICX);
@@ -706,10 +714,12 @@ class StakingTest extends TestBase {
         Map<String, BigInteger> expectedDelegation = new HashMap<>();
         Map<String, BigInteger> actualUserDelegation = new HashMap<>();
         for (PrepDelegations delegation : prepDelegations) {
-            actualUserDelegation.put(delegation._address.toString(), BigInteger.valueOf(25).multiply(ICX));
+            expectedDelegation.put(delegation._address.toString(), BigInteger.valueOf(3).multiply(ICX));
+            actualUserDelegation.put(delegation._address.toString(), BigInteger.valueOf(3).multiply(ICX));
         }
 
-        assertEquals(actualUserDelegation,staking.call("getActualUserDelegationPercentage",caller.getAddress()));
+        assertEquals(expectedDelegation,staking.call("getPrepDelegations"));
+        assertEquals(actualUserDelegation,staking.call("getAddressDelegations",caller.getAddress()));
     }
 
     @Test
@@ -717,22 +727,37 @@ class StakingTest extends TestBase {
         // delegates to only for omm Prep
 
         PrepDelegations delegation = new PrepDelegations();
-        delegation._address = sm.createAccount().getAddress();
+        Address address = sm.createAccount().getAddress();
+        delegation._address = address;
         delegation._votes_in_per = HUNDRED_PERCENTAGE;
-        List<Map<String, Object>> prepsList = (List<Map<String, Object>>) prepsResponse.get("preps");
-        String ommPrep = prepsList.get(0).get("address").toString();
-        String ommPrep2 = prepsList.get(1).get("address").toString();
 
-        BigInteger hundredPercentage = BigInteger.valueOf(100).multiply(ICX).divide(BigInteger.valueOf(100));
+        List<Address> topPreps = (List<Address>) staking.call("getTopPreps");
+        String ommPrep = topPreps.get(0).toString();
+        String ommPrep2 = topPreps.get(1).toString();
+
+        Address ommLendingPoolCore= Account.newScoreAccount(1).getAddress();
+        doReturn(ommLendingPoolCore).when(stakingSpy).getOmmLendingPoolCore();
         doReturn(Map.of(
-                ommPrep,hundredPercentage.divide(BigInteger.TWO),
-                ommPrep2,hundredPercentage.divide(BigInteger.TWO)
-        )).when(stakingSpy).getActualUserDelegationPercentage(any(Address.class));
+                ommPrep,BigInteger.valueOf(500000000000000000L).multiply(BigInteger.valueOf(100)),
+                ommPrep2,BigInteger.valueOf(500000000000000000L).multiply(BigInteger.valueOf(100))
+        )).when(stakingSpy).getActualUserDelegationPercentage(ommLendingPoolCore);
 
         Account caller = sm.createAccount();
         BigInteger amountToStake = BigInteger.valueOf(12).multiply(ICX);
         sm.call(caller, amountToStake, staking.getAddress(), "stakeICX",
                 new Address(new byte[Address.LENGTH]), new byte[0]);
+
+        Map<String, BigInteger> expectedDelegations = new HashMap<>();
+        expectedDelegations.put(ommPrep,BigInteger.valueOf(6).multiply(ICX));
+        expectedDelegations.put(ommPrep2,BigInteger.valueOf(6).multiply(ICX));
+        assertEquals(expectedDelegations,staking.call("getPrepDelegations"));
+
+
+        Map<String, BigInteger> expectedOmmPreps = new HashMap<>();
+        expectedOmmPreps.put(ommPrep,BigInteger.valueOf(6).multiply(ICX));
+        expectedOmmPreps.put(ommPrep2,BigInteger.valueOf(6).multiply(ICX));
+        assertEquals(expectedOmmPreps,staking.call("getPrepDelegations"));
+
 
         assertEquals(amountToStake,staking.call("getTotalStake"));
 
@@ -743,34 +768,44 @@ class StakingTest extends TestBase {
 
 
         Map<String, BigInteger> actualUserDelegation = new HashMap<>();
-        actualUserDelegation.put(ommPrep,ICX.divide(BigInteger.TWO));
-        actualUserDelegation.put(ommPrep2,ICX.divide(BigInteger.TWO));
-        assertEquals(actualUserDelegation,staking.call("getActualUserDelegationPercentage",caller.getAddress()));
+        actualUserDelegation.put(address.toString(),amountToStake);
+        assertEquals(actualUserDelegation,staking.call("getAddressDelegations",caller.getAddress()));
 
+        expectedDelegations.put(ommPrep2,BigInteger.ZERO);
+        expectedDelegations.put(ommPrep,BigInteger.ZERO);
+        expectedDelegations.put(address.toString(),amountToStake);
+        assertEquals(expectedDelegations,staking.call("getPrepDelegations"));
+
+        expectedOmmPreps.put(ommPrep2,BigInteger.ZERO);
+        expectedOmmPreps.put(ommPrep,BigInteger.ZERO);
     }
 
     @Test
-    public void delegate_delegations(){
+    public void stakeIcx_full_flow(){
         // user delegation contains 1 topPrep,1 not a top prep
         // omm contributrs contain 2 preps in which 1 is not a top prep
         // remaining icx should be given to top prep with the highest rank
 
-        List<Map<String, Object>> prepsList = (List<Map<String, Object>>) prepsResponse.get("preps");
+        List<Address> topPreps = (List<Address>) staking.call("getTopPreps");
+        Address address = sm.createAccount().getAddress();
+
+
         PrepDelegations delegation = new PrepDelegations();
-        delegation._address = sm.createAccount().getAddress();
+        delegation._address = address;
         delegation._votes_in_per = HUNDRED_PERCENTAGE.divide(BigInteger.TWO);
 
         PrepDelegations delegations2 = new PrepDelegations();
-        delegations2._address = (Address) prepsList.get(0).get("address");
+        delegations2._address = topPreps.get(1);
         delegations2._votes_in_per = HUNDRED_PERCENTAGE.divide(BigInteger.TWO);
 
-        BigInteger hundredPercentage = BigInteger.valueOf(100).multiply(ICX).divide(BigInteger.valueOf(100));
-        String ommPrep = prepsList.get(0).get("address").toString();
+        Address ommLendingPoolCore= Account.newScoreAccount(1).getAddress();
+        doReturn(ommLendingPoolCore).when(stakingSpy).getOmmLendingPoolCore();
+        String ommPrep = topPreps.get(2).toString();
         String ommPrep2 = sm.createAccount().getAddress().toString();
         doReturn(Map.of(
-                ommPrep,hundredPercentage.divide(BigInteger.TWO),
-                ommPrep2,hundredPercentage.divide(BigInteger.TWO)
-        )).when(stakingSpy).getActualUserDelegationPercentage(any(Address.class));
+                ommPrep,BigInteger.valueOf(500000000000000000L).multiply(BigInteger.valueOf(100)),
+                ommPrep2,BigInteger.valueOf(500000000000000000L).multiply(BigInteger.valueOf(100))
+        )).when(stakingSpy).getActualUserDelegationPercentage(ommLendingPoolCore);
 
 
         Account caller = sm.createAccount();
@@ -780,15 +815,31 @@ class StakingTest extends TestBase {
 
         assertEquals(amountToStake,staking.call("getTotalStake"));
 
+        Map<String, BigInteger> expectedDelegations = new HashMap<>();
+        expectedDelegations.put(topPreps.get(0).toString(),amountToStake.divide(BigInteger.TWO));
+        expectedDelegations.put(topPreps.get(2).toString(),amountToStake.divide(BigInteger.TWO));
+
+        assertEquals(expectedDelegations,staking.call("getPrepDelegations"));
+
         contextMock.when(() -> Context.call(sicx.getAddress(),"balanceOf",
                 caller.getAddress())).thenReturn(amountToStake);
 
         staking.invoke(caller, "delegate", (Object) new PrepDelegations[]{delegation,delegations2});
 
         Map<String, BigInteger> actualUserDelegation = new HashMap<>();
-        actualUserDelegation.put(ommPrep2,ICX.divide(BigInteger.TWO));
-        actualUserDelegation.put(delegations2._address.toString(),ICX.divide(BigInteger.TWO));
-        assertEquals(actualUserDelegation,staking.call("getActualUserDelegationPercentage",caller.getAddress()));
+        actualUserDelegation.put(delegation._address.toString(),BigInteger.valueOf(5).multiply(ICX));
+        actualUserDelegation.put(delegations2._address.toString(),BigInteger.valueOf(5).multiply(ICX));
+        assertEquals(actualUserDelegation,staking.call("getAddressDelegations",caller.getAddress()));
+
+        expectedDelegations = new HashMap<>();
+
+//        expectedDelegations.put(topPreps.get(0).toString(),BigInteger.valueOf(25).multiply(ICX).divide(BigInteger.TEN));
+        expectedDelegations.put(topPreps.get(2).toString(),BigInteger.ZERO);
+        expectedDelegations.put(delegations2._address.toString(),BigInteger.valueOf(5).multiply(ICX));
+        expectedDelegations.put(address.toString(),BigInteger.valueOf(5).multiply(ICX));
+
+        assertEquals(expectedDelegations,staking.call("getPrepDelegations"));
+
 
     }
 
