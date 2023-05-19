@@ -99,9 +99,9 @@ public class StakingImpl implements Staking {
 
     private void update_version_0_1_1() {
         productivity.set(new BigInteger("90").multiply(ONE_EXA));
-        feePercentage.set(new BigInteger("10").multiply(ONE_EXA)); //10%
-//        feeDistributionAddress.set();
-//        ommLendingPoolCore.set();
+        feePercentage.set(new BigInteger("10").multiply(ONE_EXA));
+//        feeDistributionAddress.set(Address.fromString("cx14c2fc89ed86f603d5f6e1a16870efa4ca2462a8"));
+//        ommLendingPoolCore.set(Address.fromString("cxbaed7ab453d734048aab4d597cc49cac27c17029"));
         setTopPreps();
     }
 
@@ -327,7 +327,7 @@ public class StakingImpl implements Staking {
     }
 
     @External(readonly = true)
-    public Map<String, BigInteger> getActualDelegationInNetwork() {
+    public Map<String, BigInteger> getNetworkActualDelegations() {
         Map<String, BigInteger> prepDelegationInIcx =
                 this.prepDelegationInIcx.getOrDefault(DEFAULT_DELEGATION_LIST).toMap();
         List<Address> topPreps = getTopPreps();
@@ -669,13 +669,12 @@ public class StakingImpl implements Staking {
 
         // If there is I-Score generated then update the rate
         if (dailyReward.compareTo(BigInteger.ZERO) > 0) {
-            BigInteger feeAmt = getFeePercentage().multiply(dailyReward).divide(HUNDRED_PERCENTAGE);// TODO:how to handle this feeAmount
+            BigInteger feeAmt = getFeePercentage().multiply(dailyReward).divide(HUNDRED_PERCENTAGE);
             BigInteger sicxToMint = (ONE_EXA.multiply(feeAmt)).divide(getTodayRate());
             Context.call(sicxAddress.get(), "mintTo", getFeeDistributionAddress(), sicxToMint,
                     "staking fee".getBytes());
 
             totalLifetimeReward.set(getLifetimeReward().add(dailyReward));
-            dailyReward = dailyReward.subtract(feeAmt);
             BigInteger totalStake = getTotalStake();
             BigInteger newTotalStake = totalStake.add(dailyReward);
             BigInteger newRate;
