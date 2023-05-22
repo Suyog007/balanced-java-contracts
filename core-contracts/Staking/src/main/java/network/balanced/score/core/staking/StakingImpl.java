@@ -74,7 +74,8 @@ public class StakingImpl implements Staking {
     private final VarDB<Address> feeDistributionAddress = Context.newVarDB(FEE_ADDRESS, Address.class);
     private final VarDB<Address> ommLendingPoolCore = Context.newVarDB(OMM_LENDING_POOL_CORE, Address.class);
 
-    public StakingImpl() {
+    public StakingImpl(@Optional BigInteger _feePercentage, @Optional BigInteger _productivity,
+                       @Optional Address feeDistribution, @Optional Address lendingPoolCore) {
 
         if (blockHeightWeek.get() == null) {
             @SuppressWarnings("unchecked")
@@ -85,23 +86,29 @@ public class StakingImpl implements Staking {
             productivity.set(new BigInteger("90").multiply(ONE_EXA));
             setTopPreps();
             unstakeBatchLimit.set(DEFAULT_UNSTAKE_BATCH_LIMIT);
-            stakingOn.set(true);
+            stakingOn.set(false);
         }
 
         if (currentVersion.getOrDefault("").equals(Versions.STAKING)) {
             Context.revert("Can't Update same version of code");
         }
         currentVersion.set(Versions.STAKING);
-        if (Versions.STAKING.equals("v1.0.0")) {
-            update_version_0_1_1();
+        if (Versions.STAKING.equals("v1.0.2")) {
+            productivity.set(_productivity);
+            feePercentage.set(_feePercentage);
+            feeDistributionAddress.set(feeDistribution);
+            ommLendingPoolCore.set(lendingPoolCore);
+
         }
     }
 
-    private void update_version_0_1_1() {
-        productivity.set(new BigInteger("90").multiply(ONE_EXA));
-        feePercentage.set(new BigInteger("10").multiply(ONE_EXA));
-//        feeDistributionAddress.set(Address.fromString("cx14c2fc89ed86f603d5f6e1a16870efa4ca2462a8"));
-//        ommLendingPoolCore.set(Address.fromString("cxbaed7ab453d734048aab4d597cc49cac27c17029"));
+    @External
+    public void updatePreps(){
+
+        int totalPreps = this.topPreps.size();
+        for (int i = 0; i < totalPreps; i++) {
+            this.topPreps.removeLast();
+        }
         setTopPreps();
     }
 
@@ -233,6 +240,9 @@ public class StakingImpl implements Staking {
     @External
     public void setPrepProductivity(BigInteger _productivity) {
         onlyOwner();
+        if (_productivity.compareTo(HUNDRED_PERCENTAGE) > 0 || _productivity.compareTo(BigInteger.ZERO) <0){
+            Context.revert(TAG +" productivity is not in range");
+        }
         productivity.set(_productivity);
     }
 
@@ -326,58 +336,6 @@ public class StakingImpl implements Staking {
         return allPrepDelegations;
     }
 
-    @External(readonly = true)
-    public Map<String, BigInteger> getNetworkActualDelegations() {
-        Map<String, BigInteger> prepDelegationInIcx =
-                this.prepDelegationInIcx.getOrDefault(DEFAULT_DELEGATION_LIST).toMap();
-        List<Address> topPreps = getTopPreps();
-        BigInteger specifiedIcxSum = BigInteger.ZERO;
-        List<Address> addressInSpecification = new ArrayList<>();
-        for (Map.Entry<String, BigInteger> prepDelegation : prepDelegationInIcx.entrySet()) {
-            Address prep = Address.fromString(prepDelegation.getKey());
-            if (topPreps.contains(prep)) {
-                specifiedIcxSum = specifiedIcxSum.add(prepDelegation.getValue());
-                addressInSpecification.add(prep);
-            }
-        }
-        BigInteger totalStake = getTotalStake();
-        BigInteger unspecifiedICX = totalStake.subtract(specifiedIcxSum);
-        Map<String, BigInteger> ommDelegations = getActualUserDelegationPercentage(getOmmLendingPoolCore());
-        BigInteger ommPrepSize = BigInteger.valueOf(ommDelegations.size());
-        BigInteger remaining = unspecifiedICX;
-
-
-        BigInteger topPrepSpecification = BigInteger.ZERO;
-        Map<String, BigInteger> allPrepDelegations = new HashMap<>();
-        if (ommPrepSize.compareTo(BigInteger.ZERO) > 0) {
-            for (Map.Entry<String, BigInteger> prepSet : ommDelegations.entrySet()) {
-                Address prep = Address.fromString(prepSet.getKey());
-                if (topPreps.contains(prep)) {
-
-                    BigInteger percentageDelegation = prepSet.getValue();
-                    BigInteger amountToAdd = unspecifiedICX.multiply(percentageDelegation).divide(HUNDRED_PERCENTAGE);
-
-                    remaining = remaining.subtract(amountToAdd);
-                    if (prep.toString().equals(topPreps.get(0).toString())) {
-                        topPrepSpecification = amountToAdd;
-                    }
-                    allPrepDelegations.put(prep.toString(), amountToAdd);
-                }
-            }
-        }
-
-        if (remaining.compareTo(BigInteger.ZERO) > 0) {
-            allPrepDelegations.put(topPreps.get(0).toString(), remaining.add(topPrepSpecification));
-        }
-
-        for (Address prep : addressInSpecification) {
-            BigInteger amountInDelegation = allPrepDelegations.get(prep.toString());
-            if (amountInDelegation == null) {
-                allPrepDelegations.put(prep.toString(), prepDelegationInIcx.get(prep.toString()));
-            }
-        }
-        return allPrepDelegations;
-    }
 
     @External(readonly = true)
     public Map<String, BigInteger> getPrepDelegations() {
