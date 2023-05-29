@@ -510,12 +510,28 @@ public class StakingImpl implements Staking {
             }
             // return amount distributed to top 100
             List<Address> topPreps = getTopPreps();
-            BigInteger totalTopPreps = BigInteger.valueOf(topPreps.size());
-            for (Address topPrep : topPreps) {
-                BigInteger amount = totalIcxHold.divide(totalTopPreps);
-                delegationIcx.put(topPrep.toString(), amount);
-                totalIcxHold = totalIcxHold.subtract(amount);
-                totalTopPreps = totalTopPreps.subtract(BigInteger.ONE);
+            Map<String, BigInteger> ommDelegations = getActualUserDelegationPercentage(getOmmLendingPoolCore());
+            BigInteger ommPrepSize = BigInteger.valueOf(ommDelegations.size());
+            BigInteger remaining = totalIcxHold;
+            BigInteger topPrepICXSpecification = BigInteger.ZERO;
+            if (ommPrepSize.compareTo(BigInteger.ZERO) > 0) {
+                for (Map.Entry<String, BigInteger> prepSet : ommDelegations.entrySet()) {
+                    Address prep = Address.fromString(prepSet.getKey());
+                    if (topPreps.contains(prep)) {
+                        BigInteger percentageDelegation = prepSet.getValue();
+                        BigInteger amountToAdd = totalIcxHold.multiply(percentageDelegation).divide(HUNDRED_PERCENTAGE);
+
+                        remaining = remaining.subtract(amountToAdd);
+                        delegationIcx.put(prep.toString(),amountToAdd);
+                        if (prep.toString().equals(topPreps.get(0).toString())) {
+                            topPrepICXSpecification = amountToAdd;
+                        }
+
+                    }
+                }
+            }
+            if (remaining.compareTo(BigInteger.ZERO)>0){
+                delegationIcx.put(topPreps.get(0).toString(),remaining.add(topPrepICXSpecification));
             }
         } else {
             BigInteger totalPercentage = HUNDRED_PERCENTAGE;

@@ -135,4 +135,7 @@ public interface Staking extends Version {
 
     @External(readonly = true)
     public BigInteger getPrepProductivity();
+
+    @External(readonly = true)
+    Map<String, BigInteger> getbOMMDelegations();
 }
